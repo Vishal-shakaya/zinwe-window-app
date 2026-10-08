@@ -1,0 +1,15 @@
+<Project>
+  <!-- Shared by every C# project under window-app/. The WiX installer does not import C# props. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Company>SKYTECHNO</Company>
+    <Product>Zinwe Agent</Product>
+    <Copyright>© SKYTECHNO</Copyright>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>

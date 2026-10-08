@@ -1,0 +1,21 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+
+  <!--
+    Builds ZinweAgent.msi from the self-contained publish output in ..\artifacts\publish\.
+    Don't build this directly: run ..\build.ps1, which publishes first.
+    Pinned to WiX v6 (v7 adds a mandatory OSMF EULA step; revisit before commercial launch).
+  -->
+  <PropertyGroup>
+    <OutputName>ZinweAgent</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+    <PublishRoot>$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishRoot>
+    <DefineConstants>ProductVersion=$(ProductVersion);ServiceDir=$(PublishRoot)service;TrayDir=$(PublishRoot)tray</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- util:ServiceConfig (service crash recovery). -->
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+<Application x:Class="Zinwe.Agent.Tray.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ThemeMode="Light"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <!-- Brand tokens (match zinwe/website: orange / black / white). -->
+        <SolidColorBrush x:Key="Zinwe.Orange" Color="#FF5C1A" />
+        <SolidColorBrush x:Key="Zinwe.Ink" Color="#0B0B0B" />
+        <SolidColorBrush x:Key="Zinwe.Muted" Color="#6B6B6B" />
+        <SolidColorBrush x:Key="Zinwe.Line" Color="#E6E6E6" />
+        <SolidColorBrush x:Key="Zinwe.Ok" Color="#16A34A" />
+        <SolidColorBrush x:Key="Zinwe.Warn" Color="#D97706" />
+        <SolidColorBrush x:Key="Zinwe.Bad" Color="#DC2626" />
+        <FontFamily x:Key="Zinwe.Font">Segoe UI Variable Text, Segoe UI</FontFamily>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,114 @@
+<!--
+  Zinwe Agent MSI.
+
+  Silent install (how admins / RMM tools deploy it):
+    msiexec /i ZinweAgent.msi ENROLLMENT_KEY=ZNW-XXXX-XXXX-XXXX /qn
+  Optional: BACKEND_URL=https://staging.zinwe.io  (overrides appsettings.json)
+
+  What it lays down:
+    Program Files\Zinwe Agent\service\  -> Windows service "ZinweAgent" (LocalSystem, auto start, restarts on crash)
+    Program Files\Zinwe Agent\tray\     -> per-user tray app, started at sign-in via HKLM\...\Run
+    HKLM\SOFTWARE\Zinwe\Agent           -> EnrollmentKey / BackendBaseUrl (service deletes the key after enrolling)
+    ProgramData\Zinwe\Agent             -> service state; ACL = SYSTEM + Administrators only
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="Zinwe Agent"
+           Manufacturer="SKYTECHNO"
+           Version="$(ProductVersion)"
+           UpgradeCode="380CF287-EB86-4E88-AAA7-BD86EDA0521E"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Zinwe Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Hidden: keeps the key out of the verbose MSI log. -->
+    <Property Id="ENROLLMENT_KEY" Secure="yes" Hidden="yes" />
+    <Property Id="BACKEND_URL" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Zinwe Agent">
+        <Directory Id="SERVICEFOLDER" Name="service" />
+        <Directory Id="TRAYFOLDER" Name="tray" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="ZinweDataRoot" Name="Zinwe">
+        <Directory Id="DATAFOLDER" Name="Agent" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Zinwe Agent">
+      <ComponentGroupRef Id="ServiceFiles" />
+      <ComponentGroupRef Id="TrayFiles" />
+      <ComponentGroupRef Id="MachineConfig" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ServiceFiles" Directory="SERVICEFOLDER">
+      <Component Id="ServiceExe">
+        <File Id="ServiceExeFile" Source="$(ServiceDir)\Zinwe.Agent.Service.exe" KeyPath="yes" />
+        <!-- Name must match AgentInfo.ServiceName. -->
+        <ServiceInstall Id="ZinweAgentService"
+                        Name="ZinweAgent"
+                        DisplayName="Zinwe Agent"
+                        Description="Protects company data on this PC and reports to your Zinwe dashboard."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Vital="yes">
+          <!-- Crash → restart after 10s, every time; failure count resets daily. -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="10"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="ZinweAgentControl" Name="ZinweAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <Files Include="$(ServiceDir)\**">
+        <Exclude Files="$(ServiceDir)\Zinwe.Agent.Service.exe" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="TrayFiles" Directory="TRAYFOLDER">
+      <Component Id="TrayAutostart">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                       Name="ZinweTray" Type="string" Value="&quot;[TRAYFOLDER]Zinwe.Agent.Tray.exe&quot;" KeyPath="yes" />
+      </Component>
+      <Files Include="$(TrayDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="MachineConfig">
+      <!-- Locked-down state folder: standard users can't read or delete the device identity. -->
+      <Component Id="DataFolder" Directory="DATAFOLDER" Guid="9C1D7C55-5C77-4C3F-9D53-3C0B7F6E2A10">
+        <CreateFolder>
+          <PermissionEx Sddl="O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+        </CreateFolder>
+      </Component>
+
+      <!--
+        KeyPath is a marker, not the key itself: the service deletes EnrollmentKey after enrolling, and a
+        missing KeyPath would make MSI "repair" quietly write the old key back.
+      -->
+      <Component Id="EnrollmentKeyValue" Directory="INSTALLFOLDER" Condition="ENROLLMENT_KEY" Transitive="yes">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Zinwe\Agent">
+          <RegistryValue Name="EnrollmentKey" Type="string" Value="[ENROLLMENT_KEY]" />
+          <RegistryValue Name="EnrollmentKeyProvided" Type="integer" Value="1" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <Component Id="BackendUrlValue" Directory="INSTALLFOLDER" Condition="BACKEND_URL" Transitive="yes">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Zinwe\Agent" Name="BackendBaseUrl" Type="string" Value="[BACKEND_URL]" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

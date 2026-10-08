@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Per-user tray app: status, consent and alerts. Talks only to the local service, never to the backend. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Only for System.Windows.Forms.NotifyIcon; WPF has no tray icon of its own. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <!-- Application.ThemeMode (built-in Fluent theme) is still flagged experimental. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <!-- Required by [LibraryImport] source-generated P/Invoke (DestroyIcon). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms + WPF both define Application, MessageBox, etc. Keep WPF as the default namespace. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zinwe.Agent.Core\Zinwe.Agent.Core.csproj" />
+  </ItemGroup>
+
+</Project>

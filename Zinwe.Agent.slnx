@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Zinwe.Agent.Core/Zinwe.Agent.Core.csproj" />
+    <Project Path="src/Zinwe.Agent.Service/Zinwe.Agent.Service.csproj" />
+    <Project Path="src/Zinwe.Agent.Tray/Zinwe.Agent.Tray.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zinwe.Agent.Core.Tests/Zinwe.Agent.Core.Tests.csproj" />
+  </Folder>
+</Solution>
