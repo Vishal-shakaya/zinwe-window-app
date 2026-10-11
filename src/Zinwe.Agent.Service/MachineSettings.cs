@@ -6,10 +6,11 @@ namespace Zinwe.Agent.Service;
 /// <summary>Values the MSI writes to HKLM\SOFTWARE\Zinwe\Agent.</summary>
 internal static class MachineSettings
 {
-    public const string EnrollmentKeyValue = "EnrollmentKey";
+    public const string MemberEmailValue = "MemberEmail";
+    public const string MemberIdValue = "MemberId";
     public const string BackendBaseUrlValue = "BackendBaseUrl";
 
-    /// <summary>Registry → config keys. Only the backend URL is static config; the enrollment key is read live.</summary>
+    /// <summary>Registry → config keys. Only the backend URL is static config; the member credential is read live.</summary>
     public static Dictionary<string, string?> ReadConfigOverrides()
     {
         var overrides = new Dictionary<string, string?>();

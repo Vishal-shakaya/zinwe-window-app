@@ -17,7 +17,7 @@ public sealed class BackendPolicyAndEventsTests
     [InlineData("block", UsbMode.Block)]
     public async Task GetPolicy_uses_device_auth_and_parses_snake_case_modes(string wire, UsbMode expected)
     {
-        var backend = new FakeBackend { Respond = _ => FakeBackend.Json(HttpStatusCode.OK, $$"""{"version": 3, "usb": {"mode": "{{wire}}"}}""") };
+        var backend = new FakeBackend { Respond = _ => FakeBackend.Json(HttpStatusCode.OK, $$$"""{"version": 3, "usb": {"mode": "{{{wire}}}"}}""") };
 
         var policy = await backend.Client().GetPolicyAsync("tok", CancellationToken.None);
 
@@ -106,6 +106,22 @@ public sealed class BackendPolicyAndEventsTests
         Assert.Contains("events", e.Message);
     }
 
+    // Real DRF 3.18 shapes for a refused batch (captured from the backend's EventUploadSerializer).
+    [Theory]
+    [InlineData("""{"events": {"1": {"severity": ["\"nope\" is not a valid choice."]}}}""", "\"nope\" is not a valid choice.")]
+    [InlineData("""{"events": {"non_field_errors": ["This list may not be empty."]}}""", "This list may not be empty.")]
+    [InlineData("""{"events": [{}, {"type": ["Use dotted lowercase names like usb.connected."]}]}""", "Use dotted lowercase names like usb.connected.")]
+    [InlineData("""{"events": [7, null]}""", "The backend refused the request (400).")]
+    public async Task UploadEvents_400_reads_nested_drf_errors_without_throwing(string body, string expectedMessage)
+    {
+        var backend = new FakeBackend { Respond = _ => FakeBackend.Json(HttpStatusCode.BadRequest, body) };
+
+        var e = await Assert.ThrowsAsync<EventsRejectedException>(() => backend.Client().UploadEventsAsync(
+            "tok", [AgentEvents.UsbPolicyApplied(UsbMode.Allow, false)], CancellationToken.None));
+
+        Assert.Contains(expectedMessage, e.Message);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(101)]
@@ -127,7 +143,7 @@ public sealed class BackendPolicyAndEventsTests
                 """{"device_id": 7, "server_time": "2026-10-09T10:00:00Z", "next_heartbeat_seconds": 60, "policy_version": 4}"""),
         };
 
-        var beat = await backend.Client().HeartbeatAsync("tok", new HeartbeatRequest("PC", "Win", "0.1.0"), CancellationToken.None);
+        var beat = await backend.Client().HeartbeatAsync("tok", new HeartbeatRequest("PC", "Win", "0.1.0", "working", 0, 0), CancellationToken.None);
 
         Assert.Equal(4, beat.PolicyVersion);
     }

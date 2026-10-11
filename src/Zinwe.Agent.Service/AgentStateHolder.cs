@@ -13,7 +13,12 @@ internal sealed class AgentStateHolder
 
     public AgentStatus Current => Volatile.Read(ref _status);
 
-    public void Set(AgentState state, long? deviceId = null, DateTimeOffset? lastHeartbeatAt = null, string? message = null)
+    public void Set(
+        AgentState state,
+        long? deviceId = null,
+        DateTimeOffset? lastHeartbeatAt = null,
+        string? message = null,
+        string? downloadUrl = null)
     {
         lock (_lock)
         {
@@ -24,6 +29,8 @@ internal sealed class AgentStateHolder
                 DeviceId = deviceId ?? (state == AgentState.NotEnrolled ? null : previous.DeviceId),
                 LastHeartbeatAt = lastHeartbeatAt ?? previous.LastHeartbeatAt,
                 Message = message,
+                // Only meaningful for UpdateRequired; cleared on any other state so a stale link can't linger.
+                DownloadUrl = downloadUrl,
             });
         }
     }

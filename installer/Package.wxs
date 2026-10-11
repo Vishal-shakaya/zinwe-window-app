@@ -1,15 +1,16 @@
 <!--
   Zinwe Agent MSI.
 
-  Silent install (how admins / RMM tools deploy it):
-    msiexec /i ZinweAgent.msi ENROLLMENT_KEY=ZNW-XXXX-XXXX-XXXX /qn
+  Silent install (how admins / RMM tools deploy it) — the member's email + id from the dashboard Team page:
+    msiexec /i ZinweAgent.msi MEMBER_EMAIL=asha@acme.in MEMBER_ID=ZM-XXXX-XXXX /qn
   Optional: BACKEND_URL=https://staging.zinwe.io  (overrides appsettings.json)
 
   What it lays down:
     Program Files\Zinwe Agent\service\  -> Windows service "ZinweAgent" (LocalSystem, auto start, restarts on crash)
     Program Files\Zinwe Agent\tray\     -> per-user tray app, started at sign-in via HKLM\...\Run
-    HKLM\SOFTWARE\Zinwe\Agent           -> EnrollmentKey / BackendBaseUrl (service deletes the key after enrolling)
-    ProgramData\Zinwe\Agent             -> service state; ACL = SYSTEM + Administrators only
+    HKLM\SOFTWARE\Zinwe\Agent           -> MemberEmail / MemberId / BackendBaseUrl (service deletes the credential after enrolling)
+    ProgramData\Zinwe\Agent             -> service state (device.dat, policy.json, events.db); ACL = SYSTEM + Administrators only
+    HKLM\SOFTWARE\Policies\...\RemovableStorageDevices\{53f5630d-...}  -> written by the service (USB rule); removed on uninstall
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
@@ -22,8 +23,23 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Zinwe Agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Hidden: keeps the key out of the verbose MSI log. -->
-    <Property Id="ENROLLMENT_KEY" Secure="yes" Hidden="yes" />
+    <!--
+      Tamper resistance (best-effort, no kernel driver):
+        - ARPSYSTEMCOMPONENT hides Zinwe from Settings ▸ Apps and Control Panel ▸ Programs, so a member doesn't
+          even see an uninstall entry; ARPNOMODIFY/REMOVE/REPAIR disable those buttons if it is ever shown.
+        - perMachine install already means removal needs a local admin, and the service/state folders are
+          locked to SYSTEM + Administrators, so a standard (non-admin) member cannot remove Zinwe at all.
+      LIMIT: a determined LOCAL ADMIN can still force-remove via `msiexec /x` — fully preventing that needs a
+      kernel driver / protected process (deliberately out of scope). See the service-DACL note on ServiceInstall.
+    -->
+    <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREMOVE" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- Hidden: keeps the member id out of the verbose MSI log. -->
+    <Property Id="MEMBER_EMAIL" Secure="yes" />
+    <Property Id="MEMBER_ID" Secure="yes" Hidden="yes" />
     <Property Id="BACKEND_URL" Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -60,7 +76,7 @@
                         ErrorControl="normal"
                         Account="LocalSystem"
                         Vital="yes">
-          <!-- Crash → restart after 10s, every time; failure count resets daily. -->
+          <!-- Crash â†’ restart after 10s, every time; failure count resets daily. -->
           <util:ServiceConfig FirstFailureActionType="restart"
                               SecondFailureActionType="restart"
                               ThirdFailureActionType="restart"
@@ -68,6 +84,22 @@
                               ResetPeriodInDays="1" />
         </ServiceInstall>
         <ServiceControl Id="ZinweAgentControl" Name="ZinweAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!--
+          OPTIONAL further hardening (validate on a real box before shipping): a custom service DACL that grants
+          SYSTEM full control but withholds SERVICE_STOP / DELETE from Administrators, so a member can't
+          `sc stop ZinweAgent` / `sc delete` it, while the MSI (running as SYSTEM) can still stop it for
+          upgrade/uninstall. In WiX this is a `util:PermissionEx` child of this ServiceInstall granting SYSTEM
+          GenericAll and Administrators only ServiceQueryStatus/ServiceStart (no ServiceStop/Delete). Left as a
+          documented step — a local admin can rewrite the DACL (SeTakeOwnership), so it deters, not prevents.
+        -->
+
+        <!--
+          The service writes Deny_Read / Deny_Write here to enforce the owner's USB rule. Uninstalling Zinwe must not
+          leave a PC's USB drives locked with nothing left to unlock them. (Must match RemovableStoragePolicy.KeyPath.)
+          On a major upgrade the new service re-applies the cached policy (policy.json) as soon as it starts.
+        -->
+        <RemoveRegistryKey Id="RemoveUsbPolicy" Root="HKLM" Action="removeOnUninstall"
+                           Key="SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices\{53f5630d-b6bf-11d0-94f2-00a0c91efb8b}" />
       </Component>
 
       <Files Include="$(ServiceDir)\**">
@@ -96,13 +128,14 @@
       </Component>
 
       <!--
-        KeyPath is a marker, not the key itself: the service deletes EnrollmentKey after enrolling, and a
-        missing KeyPath would make MSI "repair" quietly write the old key back.
+        KeyPath is a marker, not the credential itself: the service deletes MemberEmail/MemberId after enrolling,
+        and a missing KeyPath would make MSI "repair" quietly write the old credential back.
       -->
-      <Component Id="EnrollmentKeyValue" Directory="INSTALLFOLDER" Condition="ENROLLMENT_KEY" Transitive="yes">
+      <Component Id="MemberCredentialValue" Directory="INSTALLFOLDER" Condition="MEMBER_ID" Transitive="yes">
         <RegistryKey Root="HKLM" Key="SOFTWARE\Zinwe\Agent">
-          <RegistryValue Name="EnrollmentKey" Type="string" Value="[ENROLLMENT_KEY]" />
-          <RegistryValue Name="EnrollmentKeyProvided" Type="integer" Value="1" KeyPath="yes" />
+          <RegistryValue Name="MemberEmail" Type="string" Value="[MEMBER_EMAIL]" />
+          <RegistryValue Name="MemberId" Type="string" Value="[MEMBER_ID]" />
+          <RegistryValue Name="MemberCredentialProvided" Type="integer" Value="1" KeyPath="yes" />
         </RegistryKey>
       </Component>
 

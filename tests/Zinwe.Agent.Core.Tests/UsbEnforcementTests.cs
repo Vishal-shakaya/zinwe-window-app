@@ -33,7 +33,7 @@ public sealed class UsbEnforcementTests
     {
         var real = new FakeEnforcer();
 
-        var enforcer = UsbEnforcerSelector.Select(isSystem: true, dryRunConfigured: false, () => real, new ListLoggerFactory());
+        var enforcer = UsbEnforcerSelector.Select(runningAsSystem: true, dryRunConfigured: false, () => real, new ListLoggerFactory());
 
         Assert.Same(real, enforcer);
     }

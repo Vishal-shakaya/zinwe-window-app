@@ -13,12 +13,19 @@
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
     <!-- Required by [LibraryImport] source-generated P/Invoke (DestroyIcon). -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Real Zinwe mark as the window/taskbar/exe icon. -->
+    <ApplicationIcon>Assets\zinwe.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- WinForms + WPF both define Application, MessageBox, etc. Keep WPF as the default namespace. -->
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The brand mark (orange Z on white): shown in the widget; also the source for the tray icon. -->
+    <Resource Include="Assets\zinwe-mark.png" />
   </ItemGroup>
 
   <ItemGroup>

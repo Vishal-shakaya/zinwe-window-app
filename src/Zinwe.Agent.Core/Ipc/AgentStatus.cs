@@ -14,6 +14,9 @@ public enum AgentState
     Offline,
     /// <summary>The owner removed this PC (or the key was refused). Needs a new enrollment key.</summary>
     Rejected,
+    /// <summary>This agent is below the required version. Protection keeps running; the employee's work is
+    /// paused until they download and install the update (see <see cref="AgentStatus.DownloadUrl"/>).</summary>
+    UpdateRequired,
 }
 
 /// <summary>
@@ -30,4 +33,6 @@ public sealed record AgentStatus(
     DateTimeOffset? LastHeartbeatAt,
     string? Message,
     int? PolicyVersion = null,
-    string? UsbMode = null);
+    string? UsbMode = null,
+    /// <summary>Where to download the update when <see cref="State"/> is <see cref="AgentState.UpdateRequired"/>.</summary>
+    string? DownloadUrl = null);

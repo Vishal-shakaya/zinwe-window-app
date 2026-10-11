@@ -11,6 +11,12 @@
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
     <PublishRoot>$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishRoot>
     <DefineConstants>ProductVersion=$(ProductVersion);ServiceDir=$(PublishRoot)service;TrayDir=$(PublishRoot)tray</DefineConstants>
+    <!--
+      ICE60: SQLite's native e_sqlite3.dll (service only) has a file version but no language in its version
+      resource. Harmless for us (language only breaks ties between equal versions); WiX also refuses a made-up
+      DefaultLanguage for such a file (WIX1101), so the ICE is suppressed instead.
+    -->
+    <SuppressIces>ICE60</SuppressIces>
   </PropertyGroup>
 
   <ItemGroup>

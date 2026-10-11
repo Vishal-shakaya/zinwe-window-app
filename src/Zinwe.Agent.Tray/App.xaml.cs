@@ -3,8 +3,8 @@ using System.Windows;
 namespace Zinwe.Agent.Tray;
 
 /// <summary>
-/// Starts once per signed-in user (HKLM\...\Run, written by the MSI). No main window:
-/// lives in the notification area and opens <see cref="StatusWindow"/> on demand.
+/// Starts once per signed-in user (HKLM\...\Run, written by the MSI). No main window at launch:
+/// lives in the notification area and opens <see cref="WidgetWindow"/> on demand.
 /// </summary>
 public partial class App : Application
 {

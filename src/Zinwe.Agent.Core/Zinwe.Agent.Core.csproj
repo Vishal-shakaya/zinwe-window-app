@@ -6,7 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <!--
+      PrivateAssets: the event queue only runs in the service, so SQLite (incl. the native e_sqlite3.dll) must not
+      flow into the tray. Projects that use EventQueue (service, tests) reference Microsoft.Data.Sqlite themselves.
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>

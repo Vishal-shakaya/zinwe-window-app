@@ -6,7 +6,7 @@ namespace Zinwe.Agent.Core.Tests;
 
 public sealed class BackendClientTests
 {
-    private static readonly EnrollRequest Enroll = new("ZNW-AAAA-BBBB-CCCC", "machine-1", "PC-01", "Windows 11", "0.1.0");
+    private static readonly EnrollRequest Enroll = new("asha@acme.in", "ZM-7KQ2-9F3M", "machine-1", "PC-01", "Windows 11", "0.1.0");
 
     [Fact]
     public async Task Enroll_sends_snake_case_and_parses_response()
@@ -18,7 +18,8 @@ public sealed class BackendClientTests
 
         Assert.Equal(new EnrollResponse(7, "tok", false), result);
         Assert.Equal("/api/devices/enroll/", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Contains("\"enrollment_key\":\"ZNW-AAAA-BBBB-CCCC\"", handler.LastBody);
+        Assert.Contains("\"email\":\"asha@acme.in\"", handler.LastBody);
+        Assert.Contains("\"member_id\":\"ZM-7KQ2-9F3M\"", handler.LastBody);
         Assert.Contains("\"machine_id\":\"machine-1\"", handler.LastBody);
         Assert.Contains("\"platform\":\"windows\"", handler.LastBody);
         // Regression: a chunked body (no Content-Length) reaches Django's WSGI server as empty.
@@ -26,7 +27,7 @@ public sealed class BackendClientTests
     }
 
     [Fact]
-    public async Task Enroll_400_on_another_field_is_a_retryable_error_not_a_refused_key()
+    public async Task Enroll_400_on_another_field_is_a_retryable_error_not_a_refused_credential()
     {
         var client = Create(new StubHandler(HttpStatusCode.BadRequest, """{"machine_id": ["This field is required."]}"""));
 
@@ -35,14 +36,34 @@ public sealed class BackendClientTests
         Assert.Contains("machine_id", e.Message);
     }
 
-    [Fact]
-    public async Task Enroll_400_surfaces_the_backend_message()
+    [Theory]
+    [InlineData("""{"member_id": ["That member id is not valid."]}""", "That member id is not valid.")]
+    [InlineData("""{"email": ["No member with that email."]}""", "No member with that email.")]
+    public async Task Enroll_400_on_the_credential_is_a_refusal(string body, string expected)
     {
-        var client = Create(new StubHandler(HttpStatusCode.BadRequest, """{"enrollment_key": ["This enrollment key is not valid."]}"""));
+        var client = Create(new StubHandler(HttpStatusCode.BadRequest, body));
 
         var e = await Assert.ThrowsAsync<EnrollmentRejectedException>(() => client.EnrollAsync(Enroll, CancellationToken.None));
 
-        Assert.Equal("This enrollment key is not valid.", e.Message);
+        Assert.Equal(expected, e.Message);
+    }
+
+    [Fact]
+    public async Task GetMessages_sends_device_auth_and_parses_snake_case()
+    {
+        var handler = new StubHandler(HttpStatusCode.OK, """
+            [{"id": 5, "title": "USB blocked", "body": "No copying to USB.", "severity": "warning", "created_at": "2026-10-10T10:00:00+05:30"}]
+            """);
+        var client = Create(handler);
+
+        var messages = await client.GetMessagesAsync("tok", CancellationToken.None);
+
+        var m = Assert.Single(messages);
+        Assert.Equal(5, m.Id);
+        Assert.Equal("USB blocked", m.Title);
+        Assert.Equal("warning", m.Severity);
+        Assert.Equal("/api/devices/messages/", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("Device", handler.LastRequest.Headers.Authorization!.Scheme);
     }
 
     [Fact]
@@ -52,7 +73,7 @@ public sealed class BackendClientTests
             """{"device_id": 7, "server_time": "2026-10-09T10:00:00+05:30", "next_heartbeat_seconds": 60, "policy_version": 0}""");
         var client = Create(handler);
 
-        var beat = await client.HeartbeatAsync("tok", new HeartbeatRequest("PC-01", "Windows 11", "0.1.0"), CancellationToken.None);
+        var beat = await client.HeartbeatAsync("tok", new HeartbeatRequest("PC-01", "Windows 11", "0.1.0", "working", 60, 10), CancellationToken.None);
 
         Assert.Equal(60, beat.NextHeartbeatSeconds);
         Assert.Equal(TimeSpan.FromHours(5.5), beat.ServerTime.Offset);
@@ -66,7 +87,7 @@ public sealed class BackendClientTests
         var client = Create(new StubHandler(HttpStatusCode.Unauthorized, """{"detail": "Device has been removed."}"""));
 
         var e = await Assert.ThrowsAsync<DeviceRejectedException>(
-            () => client.HeartbeatAsync("tok", new HeartbeatRequest("a", "b", "c"), CancellationToken.None));
+            () => client.HeartbeatAsync("tok", new HeartbeatRequest("a", "b", "c", "not_started", 0, 0), CancellationToken.None));
 
         Assert.Equal("Device has been removed.", e.Message);
     }
@@ -77,7 +98,7 @@ public sealed class BackendClientTests
         var client = Create(new StubHandler(HttpStatusCode.BadGateway, "<html>bad gateway</html>"));
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => client.HeartbeatAsync("tok", new HeartbeatRequest("a", "b", "c"), CancellationToken.None));
+            () => client.HeartbeatAsync("tok", new HeartbeatRequest("a", "b", "c", "not_started", 0, 0), CancellationToken.None));
     }
 
     [Theory]

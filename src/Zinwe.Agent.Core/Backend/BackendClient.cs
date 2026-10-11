@@ -8,7 +8,7 @@ using Zinwe.Agent.Core.Policy;
 
 namespace Zinwe.Agent.Core.Backend;
 
-/// <summary>The enrollment key was refused (unknown, rotated, or the account is disabled).</summary>
+/// <summary>The member credential was refused (unknown email/id, or the account is disabled).</summary>
 public sealed class EnrollmentRejectedException(string message) : Exception(message);
 
 /// <summary>The backend no longer recognises this device's token (removed by the owner, or reinstalled elsewhere).</summary>
@@ -57,13 +57,52 @@ public sealed class BackendClient
         if (response.StatusCode == HttpStatusCode.BadRequest)
         {
             var (field, message) = await ReadFirstErrorAsync(response, ct);
-            // Only a refused key is the admin's problem; any other 400 is an agent/backend contract bug -- retry & log.
-            throw field == "enrollment_key"
+            // A bad member credential (or disabled account) is the admin's problem -> Rejected, wait for a fix.
+            // Any other 400 is an agent/backend contract bug -> retryable, logged.
+            throw field is "email" or "member_id" or "non_field_errors" or "detail"
                 ? new EnrollmentRejectedException(message)
                 : new HttpRequestException($"Enrollment request rejected ({field}: {message}).");
         }
         response.EnsureSuccessStatusCode();
         return await ReadAsync(response, BackendJsonContext.Default.EnrollResponse, ct);
+    }
+
+    /// <summary>The member's conversation for this device (both directions, newest first). Empty when none.</summary>
+    public async Task<AgentMessage[]> GetMessagesAsync(string deviceToken, CancellationToken ct)
+    {
+        using var response = await SendAsDeviceAsync(HttpMethod.Get, "api/devices/messages/", deviceToken, null, ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadAsync(response, BackendJsonContext.Default.AgentMessageArray, ct) ?? [];
+    }
+
+    /// <summary>POST a member reply into the thread.</summary>
+    public async Task ReplyAsync(string deviceToken, string body, CancellationToken ct)
+    {
+        using var response = await SendAsDeviceAsync(
+            HttpMethod.Post, "api/devices/messages/", deviceToken,
+            JsonBody(new MemberReplyRequest(body), BackendJsonContext.Default.MemberReplyRequest), ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Mark the admin's messages to this member as seen on the PC. Best-effort (ignored on failure).</summary>
+    public async Task MarkMessagesReadAsync(string deviceToken, CancellationToken ct)
+    {
+        using var response = await SendAsDeviceAsync(HttpMethod.Post, "api/devices/messages/read/", deviceToken, null, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Upload rolled-up usage metrics (1..MaxMetricsPerUpload). The backend replaces each (bucket,category,key).</summary>
+    public async Task<MetricUploadResponse> UploadMetricsAsync(string deviceToken, IReadOnlyList<MetricUpload> metrics, CancellationToken ct)
+    {
+        if (metrics.Count is < 1 or > MaxMetricsPerUpload)
+        {
+            throw new ArgumentOutOfRangeException(nameof(metrics), metrics.Count, $"Upload 1..{MaxMetricsPerUpload} metrics at a time.");
+        }
+        using var response = await SendAsDeviceAsync(
+            HttpMethod.Post, "api/devices/metrics/upload/", deviceToken,
+            JsonBody(new MetricUploadRequest([.. metrics]), BackendJsonContext.Default.MetricUploadRequest), ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadAsync(response, BackendJsonContext.Default.MetricUploadResponse, ct);
     }
 
     public async Task<HeartbeatResponse> HeartbeatAsync(string deviceToken, HeartbeatRequest request, CancellationToken ct)
@@ -111,6 +150,7 @@ public sealed class BackendClient
     }
 
     public const int MaxEventsPerUpload = 100;
+    public const int MaxMetricsPerUpload = 1000;
 
     private static EventUpload ToUpload(AgentEvent e)
     {
@@ -162,21 +202,26 @@ public sealed class BackendClient
         }
     }
 
-    /// <summary>DRF errors are {"field": ["msg"]} or {"detail": "msg"}; return the first field and its message.</summary>
+    /// <summary>
+    /// DRF errors are {"field": ["msg"]}, {"detail": "msg"}, or nested for list fields
+    /// (DRF 3.18: {"events": {"1": {"severity": ["msg"]}}}). Returns the top-level field and the first message
+    /// found anywhere under it. Never throws on an unexpected shape.
+    /// </summary>
     private static async Task<(string Field, string Message)> ReadFirstErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var fallback = $"The backend refused the request ({(int)response.StatusCode}).";
         try
         {
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return ("", FirstMessage(doc.RootElement) ?? fallback);
+            }
             foreach (var property in doc.RootElement.EnumerateObject())
             {
-                switch (property.Value.ValueKind)
+                if (FirstMessage(property.Value) is { } message)
                 {
-                    case JsonValueKind.String:
-                        return (property.Name, property.Value.GetString() ?? fallback);
-                    case JsonValueKind.Array when property.Value.GetArrayLength() > 0:
-                        return (property.Name, property.Value[0].GetString() ?? fallback);
+                    return (property.Name, message);
                 }
             }
         }
@@ -185,5 +230,38 @@ public sealed class BackendClient
             // Not JSON (e.g. a proxy error page) -- fall through.
         }
         return ("", fallback);
+    }
+
+    private static string? FirstMessage(JsonElement element, int depth = 0)
+    {
+        if (depth > 8)
+        {
+            return null;
+        }
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                return element.GetString();
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (FirstMessage(item, depth + 1) is { } fromItem)
+                    {
+                        return fromItem;
+                    }
+                }
+                return null;
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (FirstMessage(property.Value, depth + 1) is { } fromProperty)
+                    {
+                        return fromProperty;
+                    }
+                }
+                return null;
+            default:
+                return null;
+        }
     }
 }

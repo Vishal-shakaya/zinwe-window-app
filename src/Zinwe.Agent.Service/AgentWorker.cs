@@ -3,7 +3,10 @@ using Zinwe.Agent.Core;
 using Zinwe.Agent.Core.Backend;
 using Zinwe.Agent.Core.Identity;
 using Zinwe.Agent.Core.Ipc;
+using Zinwe.Agent.Core.Messages;
+using Zinwe.Agent.Core.Metrics;
 using Zinwe.Agent.Core.Policy;
+using Zinwe.Agent.Core.Work;
 
 namespace Zinwe.Agent.Service;
 
@@ -21,13 +24,17 @@ namespace Zinwe.Agent.Service;
 internal sealed partial class AgentWorker(
     BackendClient backend,
     IdentityStore identityStore,
-    EnrollmentKeySource keySource,
+    MemberCredentialSource keySource,
     PolicySync policy,
+    MessageSync messages,
+    MetricsUploadPump metrics,
+    WorkStatusReader work,
     AgentStateHolder state,
     IOptions<AgentOptions> options,
     ILogger<AgentWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan WaitForKeyInterval = TimeSpan.FromSeconds(30);
+    // Short so a credential the member types in the widget is picked up within a few seconds.
+    private static readonly TimeSpan WaitForKeyInterval = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(5);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,15 +65,15 @@ internal sealed partial class AgentWorker(
         }
     }
 
-    /// <summary>Returns null when there is no usable key yet (caller waits and retries).</summary>
+    /// <summary>Returns null when there is no usable member credential yet (caller waits and retries).</summary>
     private async Task<DeviceIdentity?> EnrollAsync(CancellationToken ct)
     {
-        var key = keySource.Current();
-        if (key is null)
+        var credential = keySource.Current();
+        if (credential is null)
         {
             if (state.Current.State != AgentState.Rejected)
             {
-                state.Set(AgentState.NotEnrolled, message: "Waiting for an enrollment key from your admin.");
+                state.Set(AgentState.NotEnrolled, message: "Waiting for your admin to finish setup.");
             }
             return null;
         }
@@ -75,17 +82,17 @@ internal sealed partial class AgentWorker(
         try
         {
             var response = await backend.EnrollAsync(
-                new EnrollRequest(key, MachineInfo.MachineId, MachineInfo.Hostname, MachineInfo.OsVersion, AgentInfo.Version), ct);
+                new EnrollRequest(credential.Email, credential.MemberId, MachineInfo.MachineId, MachineInfo.Hostname, MachineInfo.OsVersion, AgentInfo.Version), ct);
 
             var identity = new DeviceIdentity(response.DeviceId, response.DeviceToken, options.Value.BackendBaseUrl, DateTimeOffset.UtcNow);
             identityStore.Save(identity);
-            keySource.Consume(key);
+            keySource.Consume(credential);
             LogEnrolled(response.DeviceId, response.ReEnrolled);
             return identity;
         }
         catch (EnrollmentRejectedException e)
         {
-            keySource.Consume(key); // a refused key will never start working; wait for a new one
+            keySource.Consume(credential); // a refused credential will never start working; wait for a new one
             state.Set(AgentState.Rejected, message: e.Message);
             LogEnrollmentRejected(e.Message);
             return null;
@@ -107,13 +114,27 @@ internal sealed partial class AgentWorker(
         {
             try
             {
+                var ws = work.Read(DateTimeOffset.Now);
                 var beat = await backend.HeartbeatAsync(
                     identity.DeviceToken,
-                    new HeartbeatRequest(MachineInfo.Hostname, MachineInfo.OsVersion, AgentInfo.Version), ct);
+                    new HeartbeatRequest(MachineInfo.Hostname, MachineInfo.OsVersion, AgentInfo.Version,
+                        ws.State, ws.WorkedSeconds, ws.BreakSeconds, ws.ChangedAt, ws.BreakReason), ct);
 
                 failures = 0;
                 interval = TimeSpan.FromSeconds(Math.Clamp(beat.NextHeartbeatSeconds, 15, 3600));
-                state.Set(AgentState.Connected, identity.DeviceId, DateTimeOffset.UtcNow);
+                if (beat.UpdateRequired)
+                {
+                    // Forced upgrade (M12): protection stays on, but the widget pauses the employee's work
+                    // and shows a "download the update" prompt until a newer agent reports in.
+                    state.Set(AgentState.UpdateRequired, identity.DeviceId, DateTimeOffset.UtcNow,
+                        message: "Update Zinwe to keep working. Protection is still on.",
+                        downloadUrl: beat.DownloadUrl);
+                    LogUpdateRequired(beat.DownloadUrl ?? "(none)");
+                }
+                else
+                {
+                    state.Set(AgentState.Connected, identity.DeviceId, DateTimeOffset.UtcNow);
+                }
                 LogHeartbeat(identity.DeviceId, beat.PolicyVersion, (int)interval.TotalSeconds);
 
                 // Fetch failures are logged inside and retried next beat; a 401 here lands in the catch below.
@@ -121,6 +142,8 @@ internal sealed partial class AgentWorker(
                 {
                     state.SetPolicy(policy.Current);
                 }
+                await messages.SyncAsync(identity.DeviceToken, ct); // owner → member messages for the widget
+                await metrics.UploadAsync(identity.DeviceToken, DateTimeOffset.Now, ct); // usage metrics for the dashboard
                 await Task.Delay(interval, ct);
             }
             catch (DeviceRejectedException e)
@@ -158,6 +181,9 @@ internal sealed partial class AgentWorker(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Device {DeviceId} rejected by backend ({Reason}); identity cleared")]
     private partial void LogDeviceRejected(long deviceId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Update required by backend; work paused until the agent is updated. Download: {DownloadUrl}")]
+    private partial void LogUpdateRequired(string downloadUrl);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Heartbeat failed ({Failures} in a row); retrying in {Seconds}s: {Error}")]
     private partial void LogHeartbeatFailed(int failures, int seconds, string error);

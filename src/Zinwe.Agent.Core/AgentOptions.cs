@@ -11,8 +11,11 @@ public sealed class AgentOptions
     /// <summary>Django backend root, e.g. https://api.zinwe.io (no /api suffix).</summary>
     public string BackendBaseUrl { get; set; } = "";
 
-    /// <summary>Optional: dev/test only. Production keys come from the MSI via the registry.</summary>
-    public string? EnrollmentKey { get; set; }
+    /// <summary>Member email for enrollment. Dev/test only; production comes from the MSI via the registry.</summary>
+    public string? MemberEmail { get; set; }
+
+    /// <summary>Member id (e.g. ZM-XXXX-XXXX) for enrollment. Dev/test only; production via the MSI registry.</summary>
+    public string? MemberId { get; set; }
 
     /// <summary>Used until the backend tells us otherwise in a heartbeat response.</summary>
     public int HeartbeatSeconds { get; set; } = 60;

@@ -1,0 +1,296 @@
+<Window x:Class="Zinwe.Agent.Tray.WidgetWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Zinwe"
+        Width="380" SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True"
+        Background="White"
+        FontFamily="{StaticResource Zinwe.Font}"
+        Foreground="{StaticResource Zinwe.Ink}">
+
+    <Window.Resources>
+        <!-- Primary (orange) button -->
+        <Style x:Key="Zinwe.PrimaryButton" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{StaticResource Zinwe.Orange}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Opacity" Value="0.90" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource Zinwe.Line}" />
+                                <Setter Property="Foreground" Value="{StaticResource Zinwe.Muted}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Secondary (outline) button -->
+        <Style x:Key="Zinwe.OutlineButton" TargetType="Button" BasedOn="{StaticResource Zinwe.PrimaryButton}">
+            <Setter Property="Foreground" Value="{StaticResource Zinwe.Ink}" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="6" BorderThickness="1"
+                                BorderBrush="{StaticResource Zinwe.Line}" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#F7F7F7" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource Zinwe.Muted}" />
+                                <Setter TargetName="b" Property="Opacity" Value="0.6" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Icon-ish header button (minimize) -->
+        <Style x:Key="Zinwe.HeaderButton" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource Zinwe.Muted}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#F0F0F0" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <StackPanel Margin="20,16,20,20">
+
+        <!-- Brand row + minimize -->
+        <Grid>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Image Source="pack://application:,,,/Assets/zinwe-mark.png" Width="28" Height="28"
+                       VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
+                <TextBlock Text="Zinwe" FontSize="17" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+            <Button x:Name="MinimizeButton" Style="{StaticResource Zinwe.HeaderButton}"
+                    HorizontalAlignment="Right" Content="&#x2014;" ToolTip="Minimize to the background (Zinwe keeps running)"
+                    Click="OnMinimize" />
+        </Grid>
+
+        <!-- Protection status -->
+        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+            <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="{StaticResource Zinwe.Muted}" VerticalAlignment="Center" />
+            <TextBlock x:Name="Headline" Text="Checking…" FontSize="16" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock x:Name="Detail" Text="" Foreground="{StaticResource Zinwe.Muted}" FontSize="12"
+                   TextWrapping="Wrap" Margin="20,3,0,0" />
+
+        <!-- Forced upgrade (M12): shown when the backend requires a newer agent. Work is paused until it's updated. -->
+        <Border x:Name="UpdatePanel" Visibility="Collapsed" Background="#FFF4EE"
+                BorderBrush="{StaticResource Zinwe.Orange}" BorderThickness="1" CornerRadius="6"
+                Padding="14,12" Margin="0,16,0,0">
+            <StackPanel>
+                <TextBlock Text="Update required" FontWeight="SemiBold" FontSize="14" />
+                <TextBlock Text="Your company requires a newer version of Zinwe. Work is paused on this PC until you download and install the update. Your data stays protected meanwhile."
+                           FontSize="12" Foreground="{StaticResource Zinwe.Ink}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                <Button x:Name="DownloadUpdateButton" Style="{StaticResource Zinwe.PrimaryButton}"
+                        Content="Download the update" Margin="0,12,0,0" Click="OnDownloadUpdate" />
+            </StackPanel>
+        </Border>
+
+        <!-- Connect this PC (shown until enrolled): the member types the email + id the admin emailed them. -->
+        <StackPanel x:Name="ConnectPanel" Visibility="Collapsed" Margin="0,16,0,0">
+            <Border BorderBrush="{StaticResource Zinwe.Line}" BorderThickness="1" CornerRadius="6" Padding="14,14">
+                <StackPanel>
+                    <TextBlock Text="Connect this PC" FontWeight="SemiBold" FontSize="14" />
+                    <TextBlock Text="Enter the work email and Member ID your admin emailed you."
+                               FontSize="12" Foreground="{StaticResource Zinwe.Muted}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                    <TextBlock Text="Work email" FontSize="12" Margin="0,12,0,4" />
+                    <TextBox x:Name="EmailInput" Height="34" Padding="8,0" VerticalContentAlignment="Center" FontSize="13" />
+                    <TextBlock Text="Member ID" FontSize="12" Margin="0,10,0,4" />
+                    <TextBox x:Name="MemberIdInput" Height="34" Padding="8,0" VerticalContentAlignment="Center"
+                             FontSize="13" CharacterCasing="Upper" />
+                    <TextBlock x:Name="ConnectMessage" Text="" FontSize="12" TextWrapping="Wrap"
+                               Margin="0,10,0,0" Visibility="Collapsed" />
+                    <Button x:Name="ConnectButton" Style="{StaticResource Zinwe.PrimaryButton}"
+                            Content="Connect" Margin="0,14,0,0" Click="OnConnect" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- Everything below shows only once the PC is connected. -->
+        <StackPanel x:Name="ConnectedContent">
+
+        <!-- Work timing -->
+        <Border BorderBrush="{StaticResource Zinwe.Line}" BorderThickness="1" CornerRadius="6"
+                Padding="14,12" Margin="0,16,0,0">
+            <StackPanel>
+                <Grid>
+                    <TextBlock Text="Work timing" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                    <Border x:Name="TimerStatePill" HorizontalAlignment="Right" CornerRadius="10"
+                            Background="#F0F0F0" Padding="9,2">
+                        <TextBlock x:Name="TimerStateText" Text="Not started" FontSize="11"
+                                   Foreground="{StaticResource Zinwe.Muted}" />
+                    </Border>
+                </Grid>
+
+                <TextBlock x:Name="WorkedTime" Text="0:00:00" FontSize="30" FontWeight="SemiBold" Margin="0,8,0,0" />
+                <TextBlock x:Name="BreakTime" Text="On break 0:00:00" FontSize="12"
+                           Foreground="{StaticResource Zinwe.Muted}" Margin="0,2,0,0" />
+
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="StartButton" Grid.Column="0" Style="{StaticResource Zinwe.PrimaryButton}"
+                            Content="Start" Click="OnStart" />
+                    <Button x:Name="BreakButton" Grid.Column="2" Style="{StaticResource Zinwe.OutlineButton}"
+                            Content="Break" Click="OnBreak" />
+                    <Button x:Name="EndButton" Grid.Column="4" Style="{StaticResource Zinwe.OutlineButton}"
+                            Content="End" Click="OnEnd" />
+                </Grid>
+
+                <!-- Break reason: one tap picks it and starts the break; your admin sees it in Activity. -->
+                <StackPanel x:Name="BreakReasonPanel" Visibility="Collapsed" Margin="0,12,0,0">
+                    <TextBlock Text="What's the break for?" FontSize="12" FontWeight="SemiBold" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Style="{StaticResource Zinwe.OutlineButton}" Content="Lunch" Tag="Lunch"
+                                Click="OnBreakReason" Margin="0,0,6,6" Padding="10,0" />
+                        <Button Style="{StaticResource Zinwe.OutlineButton}" Content="Tea / coffee" Tag="Tea / coffee"
+                                Click="OnBreakReason" Margin="0,0,6,6" Padding="10,0" />
+                        <Button Style="{StaticResource Zinwe.OutlineButton}" Content="Meeting" Tag="Meeting"
+                                Click="OnBreakReason" Margin="0,0,6,6" Padding="10,0" />
+                        <Button Style="{StaticResource Zinwe.OutlineButton}" Content="Personal" Tag="Personal"
+                                Click="OnBreakReason" Margin="0,0,6,6" Padding="10,0" />
+                        <Button Style="{StaticResource Zinwe.OutlineButton}" Content="Other" Tag="Other"
+                                Click="OnBreakReason" Margin="0,0,6,6" Padding="10,0" />
+                    </WrapPanel>
+                    <Button Content="Cancel" Style="{StaticResource Zinwe.HeaderButton}" HorizontalAlignment="Left"
+                            Click="OnBreakCancel" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Notifications -->
+        <Grid Margin="0,16,0,0">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Messages" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                <Border x:Name="UnreadBadge" CornerRadius="9" Background="{StaticResource Zinwe.Orange}"
+                        Padding="6,1" Margin="8,0,0,0" Visibility="Collapsed" VerticalAlignment="Center">
+                    <TextBlock x:Name="UnreadCount" Text="0" Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                </Border>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="MarkReadButton" Content="Mark read" Style="{StaticResource Zinwe.HeaderButton}"
+                        Width="Auto" Padding="8,0" FontSize="11" Click="OnMarkRead" />
+                <Button x:Name="ClearButton" Content="Clear" Style="{StaticResource Zinwe.HeaderButton}"
+                        Width="Auto" Padding="8,0" FontSize="11" Click="OnClear" />
+            </StackPanel>
+        </Grid>
+
+        <Border BorderBrush="{StaticResource Zinwe.Line}" BorderThickness="1" CornerRadius="6" Margin="0,8,0,0">
+            <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock x:Name="NoMessages" Text="No messages." Foreground="{StaticResource Zinwe.Muted}"
+                               FontSize="12" Margin="12,12" />
+                    <ItemsControl x:Name="MessageList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!-- Chat bubble: admin messages left, the employee's own replies right. -->
+                                <Border HorizontalAlignment="{Binding RowAlignment}" MaxWidth="280" Margin="12,6"
+                                        Background="{Binding BubbleBrush}" CornerRadius="10" Padding="11,8">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"
+                                                   TextWrapping="Wrap" Visibility="{Binding TitleVisibility}" />
+                                        <TextBlock Text="{Binding Body}" FontSize="12.5" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Zinwe.Ink}" Margin="0,2,0,0"
+                                                   Visibility="{Binding BodyVisibility}" />
+                                        <TextBlock Text="{Binding Stamp}" FontSize="10.5"
+                                                   Foreground="{StaticResource Zinwe.Muted}" Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Reply box: the employee answers the admin; the agent delivers it on its next check-in. -->
+        <Grid Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="ReplyInput" Height="34" Padding="8,0" VerticalContentAlignment="Center" FontSize="13"
+                     MaxLength="2000" KeyDown="OnReplyKeyDown" />
+            <Button x:Name="ReplyButton" Grid.Column="1" Width="74" Margin="8,0,0,0"
+                    Style="{StaticResource Zinwe.PrimaryButton}" Content="Reply" Click="OnReply" />
+        </Grid>
+        <TextBlock x:Name="ReplyNote" Text="" FontSize="11" Foreground="{StaticResource Zinwe.Muted}"
+                   Margin="2,5,0,0" Visibility="Collapsed" TextWrapping="Wrap" />
+
+        <!-- Facts -->
+        <Grid Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="110" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="This PC" Foreground="{StaticResource Zinwe.Muted}" FontSize="12" Margin="0,0,0,5" />
+            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="Hostname" Text="—" FontSize="12" />
+            <TextBlock Grid.Row="1" Text="USB drives" Foreground="{StaticResource Zinwe.Muted}" FontSize="12" Margin="0,0,0,5" />
+            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="UsbRule" Text="—" FontSize="12" TextWrapping="Wrap" />
+            <TextBlock Grid.Row="2" Text="Version" Foreground="{StaticResource Zinwe.Muted}" FontSize="12" />
+            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="Version" Text="—" FontSize="12" />
+        </Grid>
+
+        </StackPanel>
+        <!-- /ConnectedContent -->
+
+        <!-- Consent-first card: say plainly what Zinwe does NOT do. -->
+        <Border Background="#FFF4EE" CornerRadius="6" Padding="12,10" Margin="0,16,0,0">
+            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource Zinwe.Ink}">
+                Zinwe protects your company's data on this PC.
+                It does not record your keystrokes or take screenshots.
+            </TextBlock>
+        </Border>
+    </StackPanel>
+</Window>

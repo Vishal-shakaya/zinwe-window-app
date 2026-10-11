@@ -1,15 +1,24 @@
 using Microsoft.Extensions.Logging;
 using Zinwe.Agent.Core.Backend;
+using Zinwe.Agent.Core.Features;
 using Zinwe.Agent.Core.Usb;
 
 namespace Zinwe.Agent.Core.Policy;
 
 /// <summary>
 /// Keeps this PC on the owner's latest policy.
-///   startup:          policy.json → apply           (no network; protection is on before the first heartbeat)
-///   every heartbeat:  policy_version differs → GET policy/current/ → save policy.json → apply → usb.policy_applied
+///   startup:          policy.json → apply USB + feature config   (no network; protection is on before the first heartbeat)
+///   every heartbeat:  policy_version differs → GET policy/current/ → save policy.json → apply USB + features → usb.policy_applied
+///
+/// USB is applied directly (<see cref="UsbProtection"/>); the other features are (re)configured through
+/// <see cref="IFeaturePolicyApply"/>, which rebuilds their scope so each restarts on the new per-feature block.
 /// </summary>
-public sealed class PolicySync(BackendClient backend, PolicyStore store, UsbProtection usb, ILogger<PolicySync> logger)
+public sealed class PolicySync(
+    BackendClient backend,
+    PolicyStore store,
+    UsbProtection usb,
+    ILogger<PolicySync> logger,
+    IFeaturePolicyApply? features = null)
 {
     private AgentPolicy? _current;
     private volatile bool _applyPending;
@@ -28,8 +37,29 @@ public sealed class PolicySync(BackendClient backend, PolicyStore store, UsbProt
         }
         Volatile.Write(ref _current, cached);
         _applyPending = !usb.Apply(cached.Usb.Mode, report: false);
+        ApplyToFeatures(cached, CancellationToken.None);
         logger.LogInformation("Applied cached policy v{Version} (USB {Mode})", cached.Version, cached.Usb.Mode.ToWire());
         return cached;
+    }
+
+    /// <summary>
+    /// (Re)configure the non-USB feature modules for <paramref name="policy"/>. Startup blocks briefly here;
+    /// module start is quick (the real work runs on background loops). Never throws to the caller.
+    /// </summary>
+    private void ApplyToFeatures(AgentPolicy policy, CancellationToken ct)
+    {
+        if (features is null)
+        {
+            return;
+        }
+        try
+        {
+            features.ApplyAsync(policy, ct).GetAwaiter().GetResult();
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogError(e, "Applying feature policy v{Version} failed", policy.Version);
+        }
     }
 
     /// <summary>
@@ -73,6 +103,7 @@ public sealed class PolicySync(BackendClient backend, PolicyStore store, UsbProt
 
         Volatile.Write(ref _current, fetched);
         _applyPending = !usb.Apply(fetched.Usb.Mode, report: true);
+        ApplyToFeatures(fetched, ct);
         logger.LogInformation("Policy v{Version} received (USB {Mode})", fetched.Version, fetched.Usb.Mode.ToWire());
         return true;
     }

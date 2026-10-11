@@ -21,6 +21,8 @@ public static class StatusText
                  status.Message ?? "Waiting for your admin to finish setup.", StatusTone.Warn),
         AgentState.Rejected => ("Not connected",
                  status.Message ?? "Ask your admin for a new enrollment key.", StatusTone.Bad),
+        AgentState.UpdateRequired => ("Update required to keep working",
+                 status.Message ?? "A newer version of Zinwe is required. Download and install it to continue.", StatusTone.Bad),
         _ => ("Unknown status", "", StatusTone.Warn),
     };
 

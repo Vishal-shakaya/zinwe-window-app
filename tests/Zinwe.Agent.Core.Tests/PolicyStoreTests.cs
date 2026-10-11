@@ -26,7 +26,18 @@ public sealed class PolicyStoreTests : IDisposable
         Assert.Equal(policy, store.Load());
         Assert.Equal(Path.Combine(_dir.Path, "policy.json"), store.FilePath);
         Assert.Contains($"\"mode\": \"{mode.ToWire()}\"", File.ReadAllText(store.FilePath));
+        Assert.DoesNotContain("is_well_formed", File.ReadAllText(store.FilePath));
         Assert.False(File.Exists(store.FilePath + ".tmp"));
+    }
+
+    [Fact]
+    public void Loads_a_file_written_by_the_earlier_build_that_included_is_well_formed()
+    {
+        var store = new PolicyStore(_dir.Path);
+        Directory.CreateDirectory(_dir.Path);
+        File.WriteAllText(store.FilePath, """{"version": 2, "usb": {"mode": "block"}, "is_well_formed": true}""");
+
+        Assert.Equal(new AgentPolicy(2, new UsbPolicy(UsbMode.Block)), store.Load());
     }
 
     [Fact]

@@ -42,15 +42,62 @@ public static class UsbModeExtensions
 
 public sealed record UsbPolicy(UsbMode Mode);
 
+/// <summary>How websites are handled: just watch usage, or also block the list.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<WebMode>))]
+public enum WebMode
+{
+    /// <summary>Record usage only; don't block anything.</summary>
+    [JsonStringEnumMemberName("monitor")]
+    Monitor,
+
+    /// <summary>Record usage and block the configured categories + custom domains.</summary>
+    [JsonStringEnumMemberName("block")]
+    Block,
+}
+
+/// <summary>Owner's internet-usage + website-blocking rule. Null block ⇒ the agent keeps its local defaults.</summary>
+public sealed record WebPolicy(
+    bool Enabled,
+    WebMode Mode,
+    IReadOnlyList<string> Categories,
+    IReadOnlyList<string> CustomDomains);
+
+/// <summary>Owner's data-transfer visibility rule (sizes & counts only unless details are turned on).</summary>
+public sealed record DataTransferPolicy(
+    bool Enabled,
+    long UsbWarnBytes,
+    long LanWarnBytes,
+    long EmailWarnBytes,
+    bool IncludeDetails,
+    // Optional/trailing for back-compat: an older backend that omits it leaves lockdown off.
+    bool UsbLockdown = false);
+
+/// <summary>Owner's remote-software rule: always detects; may also block the listed tools (dry-run aware).</summary>
+public sealed record RemoteSoftwarePolicy(
+    bool Enabled,
+    bool BlockingEnabled,
+    IReadOnlyList<string> BlockedTools,
+    IReadOnlyList<string> ExtraToolExecutables);
+
 /// <summary>
 /// The owner's rules for this PC, as returned by GET /api/devices/policy/current/ and cached in policy.json.
-/// <see cref="Version"/> goes up by one each time the owner changes something.
+/// <see cref="Version"/> goes up by one each time the owner changes anything.
+///
+/// Feature blocks are optional: a policy that omits one (e.g. an older backend that only sends <see cref="Usb"/>)
+/// leaves that feature on its local appsettings defaults, so the agent stays compatible as the backend grows.
 /// </summary>
-public sealed record AgentPolicy(int Version, UsbPolicy Usb)
+public sealed record AgentPolicy(
+    int Version,
+    UsbPolicy Usb,
+    WebPolicy? Web = null,
+    DataTransferPolicy? DataTransfer = null,
+    RemoteSoftwarePolicy? RemoteSoftware = null)
 {
     /// <summary>
     /// The serializer fills missing members with null and accepts integers for enums, so check the shape
-    /// before acting on it. A malformed policy is never applied.
+    /// before acting on it. A malformed policy is never applied. Only <see cref="Usb"/> is required; the
+    /// optional feature blocks, when present, are validated where they are mapped onto each feature's options.
     /// </summary>
+    [JsonIgnore] // computed guard, not part of the wire contract or policy.json
     public bool IsWellFormed => Version >= 0 && Usb is not null && Enum.IsDefined(Usb.Mode);
 }

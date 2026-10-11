@@ -10,7 +10,7 @@ namespace Zinwe.Agent.Service;
 /// Signed-in users may read/write; only SYSTEM and Administrators may create the pipe or change its ACL.
 /// Pipes are never reachable from the network because the ACL denies the NETWORK logon SID.
 /// </summary>
-internal sealed partial class PipeServer(AgentStateHolder state, ILogger<PipeServer> logger) : BackgroundService
+internal sealed partial class PipeServer(AgentStateHolder state, MemberCredentialSource credentials, ILogger<PipeServer> logger) : BackgroundService
 {
     private const int MaxInstances = 8;
 
@@ -64,6 +64,10 @@ internal sealed partial class PipeServer(AgentStateHolder state, ILogger<PipeSer
                 {
                     await writer.WriteLineAsync(PipeProtocol.Serialize(state.Current).AsMemory(), cts.Token);
                 }
+                else if (request?.Type == PipeProtocol.RequestTypes.Enroll)
+                {
+                    await writer.WriteLineAsync(PipeProtocol.Serialize(HandleEnroll(request)).AsMemory(), cts.Token);
+                }
             }
             catch (Exception e) when (e is IOException or OperationCanceledException)
             {
@@ -74,6 +78,19 @@ internal sealed partial class PipeServer(AgentStateHolder state, ILogger<PipeSer
                 LogClientFailed(e);
             }
         }
+    }
+
+    /// <summary>Save the member-typed credential so the enrol loop uses it; the widget shows the result via status.</summary>
+    private PipeProtocol.EnrollAck HandleEnroll(PipeProtocol.Request request)
+    {
+        var email = request.Email?.Trim() ?? "";
+        var memberId = request.MemberId?.Trim() ?? "";
+        if (email.Length == 0 || memberId.Length == 0)
+        {
+            return new PipeProtocol.EnrollAck(false, "Enter both your email and your Member ID.");
+        }
+        credentials.SubmitPending(email, memberId);
+        return new PipeProtocol.EnrollAck(true, "Connecting this PC…");
     }
 
     private static PipeSecurity CreateSecurity()

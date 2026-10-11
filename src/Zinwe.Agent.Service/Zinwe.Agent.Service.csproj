@@ -8,12 +8,23 @@
     <SelfContained>true</SelfContained>
   </PropertyGroup>
 
+  <!-- For System.Windows.Automation (UI Automation): reads the foreground browser's address bar to record
+       internet usage by domain. A bare FrameworkReference (not <UseWPF>, which the Worker SDK mishandles) adds
+       just the UIA assemblies; the service never renders UI. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
+    <!-- Event queue (events.db); ships the native e_sqlite3.dll in the publish folder. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <!-- WMI: USB storage arrival events. -->
     <PackageReference Include="System.Management" Version="10.0.12" />
+    <!-- User-mode ETW (kernel network + DNS-Client providers) for upload-by-domain monitoring. No kernel driver. -->
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.16" />
   </ItemGroup>
 
   <ItemGroup>

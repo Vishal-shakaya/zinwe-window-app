@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Classic desktop Outlook COM add-in (Zinwe SendGuard): cancels an outgoing email over the attachment-size limit.
+
+    NOT part of Zinwe.Agent.slnx on purpose: it targets .NET Framework 4.8 (Office loads add-ins in-process; .NET
+    Core / .NET 10 cannot host one). Build it on a Windows box that has the .NET Framework 4.8 Developer Pack and,
+    for best results, classic Outlook installed. See README.md for build / register / validate steps.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>Zinwe.Outlook.SendGuard</AssemblyName>
+    <RootNamespace>Zinwe.Outlook.SendGuard</RootNamespace>
+    <!-- Exposes the add-in class to COM so Outlook can create it; regasm writes/reads the type's registration. -->
+    <EnableComHosting>false</EnableComHosting>
+    <ComVisible>false</ComVisible> <!-- only the [ComVisible(true)] Connect class is exported -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Platforms>AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Typed Outlook interop so the ItemSend event and MailItem/Attachments are strongly typed. -->
+    <PackageReference Include="Microsoft.Office.Interop.Outlook" Version="15.0.4797.1004" />
+  </ItemGroup>
+
+</Project>

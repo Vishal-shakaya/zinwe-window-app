@@ -12,11 +12,17 @@ public static class PipeProtocol
 {
     public const string PipeName = "Zinwe.Agent";
 
-    public sealed record Request(string Type);
+    /// <summary>A tray→service request. <see cref="Email"/>/<see cref="MemberId"/> are set only for "enroll".</summary>
+    public sealed record Request(string Type, string? Email = null, string? MemberId = null);
+
+    /// <summary>Reply to an "enroll" request: whether the credential was accepted for an enrolment attempt.</summary>
+    public sealed record EnrollAck(bool Accepted, string Message);
 
     public static class RequestTypes
     {
         public const string Status = "status";
+        /// <summary>Member typed their email + id in the widget to connect this PC.</summary>
+        public const string Enroll = "enroll";
     }
 
     internal static string Serialize(Request request) => JsonSerializer.Serialize(request, PipeJsonContext.Default.Request);
@@ -26,6 +32,10 @@ public static class PipeProtocol
     public static string Serialize(AgentStatus status) => JsonSerializer.Serialize(status, PipeJsonContext.Default.AgentStatus);
 
     public static AgentStatus? DeserializeStatus(string line) => JsonSerializer.Deserialize(line, PipeJsonContext.Default.AgentStatus);
+
+    public static string Serialize(EnrollAck ack) => JsonSerializer.Serialize(ack, PipeJsonContext.Default.EnrollAck);
+
+    public static EnrollAck? DeserializeAck(string line) => JsonSerializer.Deserialize(line, PipeJsonContext.Default.EnrollAck);
 
     /// <summary>Server side: read one request line. Returns null on a malformed or empty request.</summary>
     public static async Task<Request?> ReadRequestAsync(StreamReader reader, CancellationToken ct)
@@ -71,9 +81,35 @@ public static class AgentPipeClient
             return null;
         }
     }
+
+    /// <summary>Hand the member-typed email + id to the service to enrol with. Returns null if the service isn't reachable.</summary>
+    public static async Task<PipeProtocol.EnrollAck?> SubmitEnrollmentAsync(string email, string memberId, TimeSpan timeout, CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            await using var pipe = new NamedPipeClientStream(".", PipeProtocol.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await pipe.ConnectAsync(cts.Token);
+
+            using var reader = new StreamReader(pipe, leaveOpen: true);
+            await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+            var request = new PipeProtocol.Request(PipeProtocol.RequestTypes.Enroll, email, memberId);
+            await writer.WriteLineAsync(PipeProtocol.Serialize(request).AsMemory(), cts.Token);
+
+            var line = await reader.ReadLineAsync(cts.Token);
+            return line is null ? null : PipeProtocol.DeserializeAck(line);
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or TimeoutException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(PipeProtocol.Request))]
+[JsonSerializable(typeof(PipeProtocol.EnrollAck))]
 [JsonSerializable(typeof(AgentStatus))]
 internal sealed partial class PipeJsonContext : JsonSerializerContext;
