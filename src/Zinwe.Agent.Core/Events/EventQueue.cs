@@ -14,11 +14,17 @@ public sealed class EventQueue
 
     private readonly string _connectionString;
     private readonly Lock _lock = new();
+    private readonly Func<bool>? _recordingAllowed;
 
-    public EventQueue(string dataDirectory, int capacity = DefaultCapacity)
+    /// <param name="recordingAllowed">
+    /// Asked before each event is stored; false drops it (nothing is recorded until the member has agreed to
+    /// monitoring — see <see cref="Work.ConsentGate"/>). Null = always record.
+    /// </param>
+    public EventQueue(string dataDirectory, int capacity = DefaultCapacity, Func<bool>? recordingAllowed = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
         Capacity = capacity;
+        _recordingAllowed = recordingAllowed;
         Directory.CreateDirectory(dataDirectory);
         FilePath = Path.Combine(dataDirectory, "events.db");
         _connectionString = new SqliteConnectionStringBuilder
@@ -51,11 +57,16 @@ public sealed class EventQueue
 
     /// <summary>
     /// Stores <paramref name="evt"/>. Returns how many of the oldest events were dropped to stay within
-    /// <see cref="Capacity"/> (callers log a warning when this is non-zero). A repeated id is ignored.
+    /// <see cref="Capacity"/> (callers log a warning when this is non-zero). A repeated id is ignored, and
+    /// nothing is stored while recording is paused (no consent yet).
     /// </summary>
     public int Enqueue(AgentEvent evt)
     {
         evt.Validate();
+        if (_recordingAllowed is { } allowed && !allowed())
+        {
+            return 0;
+        }
         int dropped;
         lock (_lock)
         {

@@ -14,7 +14,7 @@ internal sealed class WidgetMemberNotifier(NotificationWriter writer) : IMemberN
         try
         {
             var id = -DateTimeOffset.UtcNow.Ticks - Random.Shared.Next(1000);
-            writer.Merge([new AgentMessage(id, title, body, severity, at ?? DateTimeOffset.Now)]);
+            writer.AddNotices([new AgentMessage(id, title, body, severity, at ?? DateTimeOffset.Now)]);
         }
         catch
         {

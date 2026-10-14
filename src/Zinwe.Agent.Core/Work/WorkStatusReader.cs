@@ -1,45 +1,53 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zinwe.Agent.Core.Messages;
 
 namespace Zinwe.Agent.Core.Work;
 
 /// <summary>The member's current work status, as the owner's dashboard shows it.</summary>
 /// <param name="ChangedAt">When the current state began (the owner's Activity timeline uses it).</param>
 /// <param name="BreakReason">Why they're on a break, when they are and picked one.</param>
+/// <param name="BreakNote">The optional message they added to the break.</param>
+/// <param name="EndReason">Why they logged out, once they have (picked in the widget).</param>
+/// <param name="EndNote">The message they added when logging out.</param>
 public sealed record WorkStatus(
     string State, long WorkedSeconds, long BreakSeconds,
-    DateTimeOffset? ChangedAt = null, string? BreakReason = null)
+    DateTimeOffset? ChangedAt = null, string? BreakReason = null, string? BreakNote = null,
+    string? EndReason = null, string? EndNote = null)
 {
     public static readonly WorkStatus NotStarted = new("not_started", 0, 0);
 }
 
 /// <summary>
 /// Reads the widget's per-user work-timing.json so the service can report work status on each heartbeat.
-/// The widget (Zinwe.Agent.Tray) owns the file; this only reads it. DEV NOTE: it lives in %LOCALAPPDATA%\Zinwe,
-/// so under the console (dev) the agent is the same user and sees it; a LocalSystem service would need per-user
-/// resolution (tracked with the same milestone as owner→member messages).
+/// The widget (Zinwe.Agent.Tray) owns the file; this only reads it, from the signed-in member's %LOCALAPPDATA%\Zinwe
+/// via <see cref="IWidgetFolder"/> (nobody signed in = not started).
 /// </summary>
 public sealed class WorkStatusReader
 {
-    private readonly string _path;
+    private const string FileName = "work-timing.json";
 
-    public WorkStatusReader(string? directory = null)
+    private readonly IWidgetFolder _folder;
+
+    public WorkStatusReader(string? directory = null) : this(new LocalWidgetFolder(directory))
     {
-        var dir = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zinwe");
-        _path = Path.Combine(dir, "work-timing.json");
     }
 
-    /// <summary>Current status, or <see cref="WorkStatus.NotStarted"/> when there's no (or a stale) file.</summary>
-    public WorkStatus Read(DateTimeOffset now)
+    public WorkStatusReader(IWidgetFolder folder) => _folder = folder;
+
+    /// <summary>Current status, or <see cref="WorkStatus.NotStarted"/> when there's no (or a stale) file or nobody is signed in.</summary>
+    public WorkStatus Read(DateTimeOffset now) =>
+        _folder.Use(dir => ReadFrom(Path.Combine(dir, FileName), now), WorkStatus.NotStarted);
+
+    private static WorkStatus ReadFrom(string path, DateTimeOffset now)
     {
         try
         {
-            if (!File.Exists(_path))
+            if (!File.Exists(path))
             {
                 return WorkStatus.NotStarted;
             }
-            var dto = JsonSerializer.Deserialize<TimingDto>(File.ReadAllText(_path), Json);
+            var dto = JsonSerializer.Deserialize<TimingDto>(File.ReadAllText(path), Json);
             if (dto is null)
             {
                 return WorkStatus.NotStarted;
@@ -58,7 +66,11 @@ public sealed class WorkStatusReader
             };
             return new WorkStatus(
                 wire, Math.Max(0, dto.WorkedSeconds), Math.Max(0, dto.BreakSeconds),
-                dto.LastTransitionAtUtc, wire == "on_break" ? dto.BreakReason : null);
+                dto.LastTransitionAtUtc,
+                wire == "on_break" ? dto.BreakReason : null,
+                wire == "on_break" ? dto.BreakNote : null,
+                wire == "ended" ? dto.EndReason : null,
+                wire == "ended" ? dto.EndNote : null);
         }
         catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
         {
@@ -75,6 +87,9 @@ public sealed class WorkStatusReader
         public long BreakSeconds { get; set; }
         public DateTimeOffset? LastTransitionAtUtc { get; set; }
         public string? BreakReason { get; set; }
+        public string? BreakNote { get; set; }
+        public string? EndReason { get; set; }
+        public string? EndNote { get; set; }
     }
 
     private static readonly JsonSerializerOptions Json = new()

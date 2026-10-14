@@ -19,7 +19,7 @@ public sealed class NotificationWriterTests : IDisposable
     [Fact]
     public void Merge_writes_new_messages_in_the_widget_schema()
     {
-        var added = _writer.Merge([Msg(1, "USB blocked"), Msg(2, "Heads up")]);
+        var added = _writer.MergeChat([Msg(1, "USB blocked"), Msg(2, "Heads up")]);
 
         Assert.Equal(2, added);
         var items = Read().GetProperty("Items");
@@ -33,8 +33,8 @@ public sealed class NotificationWriterTests : IDisposable
     [Fact]
     public void Merge_is_idempotent_by_id()
     {
-        _writer.Merge([Msg(1, "A")]);
-        var addedAgain = _writer.Merge([Msg(1, "A"), Msg(2, "B")]);
+        _writer.MergeChat([Msg(1, "A")]);
+        var addedAgain = _writer.MergeChat([Msg(1, "A"), Msg(2, "B")]);
 
         Assert.Equal(1, addedAgain); // only the new one
         Assert.Equal(2, Read().GetProperty("Items").GetArrayLength());
@@ -43,12 +43,12 @@ public sealed class NotificationWriterTests : IDisposable
     [Fact]
     public void Merge_preserves_a_read_flag_the_widget_set()
     {
-        _writer.Merge([Msg(1, "A")]);
+        _writer.MergeChat([Msg(1, "A")]);
         // Simulate the widget marking it read.
         var text = File.ReadAllText(_writer.FilePath).Replace("\"Read\": false", "\"Read\": true");
         File.WriteAllText(_writer.FilePath, text);
 
-        _writer.Merge([Msg(1, "A"), Msg(2, "B")]); // re-deliver 1, add 2
+        _writer.MergeChat([Msg(1, "A"), Msg(2, "B")]); // re-deliver 1, add 2
 
         var items = Read().GetProperty("Items").EnumerateArray().ToList();
         var one = items.First(i => i.GetProperty("Id").GetString() == "1");
@@ -58,18 +58,42 @@ public sealed class NotificationWriterTests : IDisposable
     [Fact]
     public void Empty_merge_writes_nothing()
     {
-        Assert.Equal(0, _writer.Merge([]));
+        Assert.Equal(0, _writer.MergeChat([]));
         Assert.False(File.Exists(_writer.FilePath));
     }
 
     [Fact]
     public void Member_reply_merges_as_read_and_carries_its_sender()
     {
-        _writer.Merge([new AgentMessage(5, "", "my reply", "info", DateTimeOffset.UtcNow, "member")]);
+        _writer.MergeChat([new AgentMessage(5, "", "my reply", "info", DateTimeOffset.UtcNow, "member")]);
 
         var item = Read().GetProperty("Items")[0];
         Assert.Equal("member", item.GetProperty("Sender").GetString());
         Assert.True(item.GetProperty("Read").GetBoolean()); // the member wrote it, so it's not "unread" to them
+    }
+
+    [Fact]
+    public void Chat_and_protection_notices_are_tagged_apart()
+    {
+        _writer.MergeChat([Msg(1, "Hello")]);
+        _writer.AddNotices([new AgentMessage(-5, "USB copy blocked", null, "warning", DateTimeOffset.UtcNow)]);
+
+        var items = Read().GetProperty("Items").EnumerateArray().ToList();
+        Assert.Equal("chat", items.First(i => i.GetProperty("Id").GetString() == "1").GetProperty("Kind").GetString());
+        Assert.Equal("notice", items.First(i => i.GetProperty("Id").GetString() == "-5").GetProperty("Kind").GetString());
+    }
+
+    [Fact]
+    public void AllReadLocally_is_true_only_once_the_widget_marked_every_id_read()
+    {
+        _writer.MergeChat([Msg(1, "A"), Msg(2, "B")]);
+        Assert.False(_writer.AllReadLocally([1, 2])); // delivered, not opened yet
+
+        var text = File.ReadAllText(_writer.FilePath).Replace("\"Read\": false", "\"Read\": true");
+        File.WriteAllText(_writer.FilePath, text); // the member opened the chat
+
+        Assert.True(_writer.AllReadLocally([1, 2]));
+        Assert.False(_writer.AllReadLocally([1, 3])); // 3 never reached the widget
     }
 
     public void Dispose()

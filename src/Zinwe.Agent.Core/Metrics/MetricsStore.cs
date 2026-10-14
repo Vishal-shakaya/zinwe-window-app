@@ -30,11 +30,17 @@ public sealed class MetricsStore
 
     private readonly string _connectionString;
     private readonly Lock _lock = new();
+    private readonly Func<bool>? _recordingAllowed;
 
-    public MetricsStore(string dataDirectory, int capacity = DefaultCapacity)
+    /// <param name="recordingAllowed">
+    /// Asked before each sample is stored; false drops it (nothing is recorded until the member has agreed to
+    /// monitoring — see <see cref="Work.ConsentGate"/>). Null = always record.
+    /// </param>
+    public MetricsStore(string dataDirectory, int capacity = DefaultCapacity, Func<bool>? recordingAllowed = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
         Capacity = capacity;
+        _recordingAllowed = recordingAllowed;
         Directory.CreateDirectory(dataDirectory);
         FilePath = Path.Combine(dataDirectory, "metrics.db");
         _connectionString = new SqliteConnectionStringBuilder
@@ -77,6 +83,10 @@ public sealed class MetricsStore
         if (key.Length > MaxKeyLength)
         {
             key = key[..MaxKeyLength];
+        }
+        if (_recordingAllowed is { } allowed && !allowed())
+        {
+            return 0; // recording paused: the member hasn't agreed to monitoring yet
         }
         var bucket = HourBucket(at ?? DateTimeOffset.Now).ToString("O", CultureInfo.InvariantCulture);
 

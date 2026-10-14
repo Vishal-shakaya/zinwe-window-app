@@ -4,14 +4,25 @@ using Zinwe.Agent.Core.Backend;
 namespace Zinwe.Agent.Core.Messages;
 
 /// <summary>
-/// Pulls owner→member messages after each heartbeat and merges them into the widget's notification file.
-/// Best-effort: network/HTTP failures are logged and retried next beat (a real 401 is handled by the
-/// heartbeat path, which owns the device-rejected state). Never throws to the caller.
+/// Keeps the owner↔member chat in step: posts the member's queued replies, pulls the conversation into the
+/// widget's notification file, and reports "read" once the member has opened the admin's messages.
+/// Run on its own short loop (see AgentWorker), not on the heartbeat.
+/// Best-effort: network/HTTP failures are logged and retried next round (a real 401 is handled by the
+/// heartbeat path, which owns the device-rejected state). Never throws to the caller except on cancellation.
 /// </summary>
 public sealed class MessageSync(BackendClient backend, NotificationWriter writer, MessageOutbox outbox, ILogger<MessageSync> logger)
 {
+    /// <summary>True while the member has typed a reply the agent hasn't posted yet (sync right away).</summary>
+    public bool HasPendingReplies => outbox.Pending().Count > 0;
+
     public async Task SyncAsync(string deviceToken, CancellationToken ct)
     {
+        // Nobody signed in to this PC: there is no widget to deliver to, so don't pull. That keeps the admin's
+        // "Delivered" meaning "it's on the member's screen", not "the PC was on at the login screen".
+        if (!writer.HasSignedInUser)
+        {
+            return;
+        }
         try
         {
             // 1) Push any replies the member typed in the widget, so they reach the admin...
@@ -19,14 +30,23 @@ public sealed class MessageSync(BackendClient backend, NotificationWriter writer
 
             // 2) ...then pull the whole conversation (both directions) into the widget.
             var messages = await backend.GetMessagesAsync(deviceToken, ct);
-            var added = writer.Merge(messages);
+            var added = writer.MergeChat(messages);
             if (added > 0)
             {
                 logger.LogInformation("Delivered {Count} new message(s) to the widget", added);
             }
 
-            // 3) Tell the backend the admin's messages reached this PC (for the admin's "seen" state).
-            await backend.MarkMessagesReadAsync(deviceToken, ct);
+            // 3) Tell the backend the member has READ the admin's messages - only once they opened them in the
+            //    widget's chat (Read=true locally). Skipped when nothing is unread server-side, so the short
+            //    poll doesn't write on every round.
+            var unreadOnServer = messages
+                .Where(m => !m.ReadByMember && !string.Equals(m.Sender, "member", StringComparison.OrdinalIgnoreCase))
+                .Select(m => m.Id)
+                .ToList();
+            if (unreadOnServer.Count > 0 && writer.AllReadLocally(unreadOnServer))
+            {
+                await backend.MarkMessagesReadAsync(deviceToken, ct);
+            }
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
         {

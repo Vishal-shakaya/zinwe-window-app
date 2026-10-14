@@ -79,7 +79,10 @@ public sealed class WorkTimerStore
                 state.State.ToString(),
                 (long)state.LiveWorked(now).TotalSeconds,
                 (long)state.LiveBreak(now).TotalSeconds,
-                state.BreakReason);
+                state.BreakReason,
+                state.BreakNote,
+                state.EndReason,
+                state.EndNote);
             File.AppendAllText(WidgetPaths.WorkTimingLog,
                 JsonSerializer.Serialize(entry, LogJson) + Environment.NewLine, Encoding.UTF8);
         }
@@ -95,5 +98,8 @@ public sealed class WorkTimerStore
         string State,
         long WorkedSeconds,
         long BreakSeconds,
-        string? BreakReason);
+        string? BreakReason,
+        string? BreakNote = null,
+        string? EndReason = null,
+        string? EndNote = null);
 }

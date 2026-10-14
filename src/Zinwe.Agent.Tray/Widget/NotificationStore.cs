@@ -19,7 +19,26 @@ public sealed record NotificationItem(
     string? Body = null,
     bool Read = false,
     // "owner" = an admin message/alert; "member" = the employee's own reply (shown as outgoing).
-    string Sender = "owner");
+    string Sender = "owner",
+    // "chat" = a line of the admin<->employee conversation; "notice" = a note from Zinwe's own protection.
+    // Null in files written before chat existed (see IsChat).
+    string? Kind = null)
+{
+    public const string ChatKind = "chat";
+
+    /// <summary>
+    /// Part of the admin↔employee conversation (shown in the Chat window), not a protection notice.
+    /// Older files carry no Kind: server messages have positive numeric ids, the agent's own notices negative ones.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsChat => Kind is not null
+        ? string.Equals(Kind, ChatKind, StringComparison.OrdinalIgnoreCase)
+        : long.TryParse(Id, out var n) && n > 0;
+
+    /// <summary>Written by the admin (not the employee's own reply).</summary>
+    [JsonIgnore]
+    public bool IsFromAdmin => !string.Equals(Sender, "member", StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>Root object persisted to <see cref="WidgetPaths.Notifications"/>.</summary>
 public sealed record NotificationFile(List<NotificationItem> Items)
@@ -88,26 +107,46 @@ public sealed class NotificationStore
         }
     }
 
-    /// <summary>Marks every item read and persists. Returns the updated file.</summary>
-    public NotificationFile MarkAllRead()
+    /// <summary>
+    /// Marks the matching items read and persists (only when something changed). Returns the updated file.
+    /// The agent reports chat lines as read to the admin only after this flips them.
+    /// </summary>
+    public NotificationFile MarkRead(Func<NotificationItem, bool> which)
     {
         var file = Load();
+        var changed = false;
         for (var i = 0; i < file.Items.Count; i++)
         {
-            if (!file.Items[i].Read)
+            if (!file.Items[i].Read && which(file.Items[i]))
             {
                 file.Items[i] = file.Items[i] with { Read = true };
+                changed = true;
             }
         }
-        Save(file);
+        if (changed)
+        {
+            Save(file);
+        }
         return file;
     }
 
-    /// <summary>Removes all items (employee's explicit "Clear").</summary>
-    public NotificationFile Clear()
+    /// <summary>The employee opened the chat: the admin's messages are read.</summary>
+    public NotificationFile MarkChatRead() => MarkRead(i => i.IsChat);
+
+    /// <summary>"Mark read" on the widget's Notices list.</summary>
+    public NotificationFile MarkNoticesRead() => MarkRead(i => !i.IsChat);
+
+    /// <summary>
+    /// Removes the protection notices (employee's explicit "Clear"). The chat is kept: it's the conversation
+    /// history, and clearing it would only make the agent re-deliver it as unread.
+    /// </summary>
+    public NotificationFile ClearNotices()
     {
-        var file = new NotificationFile();
-        Save(file);
+        var file = Load();
+        if (file.Items.RemoveAll(i => !i.IsChat) > 0)
+        {
+            Save(file);
+        }
         return file;
     }
 

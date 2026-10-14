@@ -15,7 +15,7 @@ public static class PipeProtocol
     /// <summary>A tray→service request. <see cref="Email"/>/<see cref="MemberId"/> are set only for "enroll".</summary>
     public sealed record Request(string Type, string? Email = null, string? MemberId = null);
 
-    /// <summary>Reply to an "enroll" request: whether the credential was accepted for an enrolment attempt.</summary>
+    /// <summary>Reply to an "enroll" or "update" request: whether the service took it on, and what to tell the member.</summary>
     public sealed record EnrollAck(bool Accepted, string Message);
 
     public static class RequestTypes
@@ -23,6 +23,8 @@ public static class PipeProtocol
         public const string Status = "status";
         /// <summary>Member typed their email + id in the widget to connect this PC.</summary>
         public const string Enroll = "enroll";
+        /// <summary>Member pressed "Update now": download, verify and install the offered release.</summary>
+        public const string Update = "update";
     }
 
     internal static string Serialize(Request request) => JsonSerializer.Serialize(request, PipeJsonContext.Default.Request);
@@ -82,8 +84,15 @@ public static class AgentPipeClient
         }
     }
 
+    /// <summary>Ask the service to install the offered update. Returns null if the service isn't reachable.</summary>
+    public static Task<PipeProtocol.EnrollAck?> RequestUpdateAsync(TimeSpan timeout, CancellationToken ct = default) =>
+        SendAsync(new PipeProtocol.Request(PipeProtocol.RequestTypes.Update), timeout, ct);
+
     /// <summary>Hand the member-typed email + id to the service to enrol with. Returns null if the service isn't reachable.</summary>
-    public static async Task<PipeProtocol.EnrollAck?> SubmitEnrollmentAsync(string email, string memberId, TimeSpan timeout, CancellationToken ct = default)
+    public static Task<PipeProtocol.EnrollAck?> SubmitEnrollmentAsync(string email, string memberId, TimeSpan timeout, CancellationToken ct = default) =>
+        SendAsync(new PipeProtocol.Request(PipeProtocol.RequestTypes.Enroll, email, memberId), timeout, ct);
+
+    private static async Task<PipeProtocol.EnrollAck?> SendAsync(PipeProtocol.Request request, TimeSpan timeout, CancellationToken ct)
     {
         try
         {
@@ -95,7 +104,6 @@ public static class AgentPipeClient
 
             using var reader = new StreamReader(pipe, leaveOpen: true);
             await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-            var request = new PipeProtocol.Request(PipeProtocol.RequestTypes.Enroll, email, memberId);
             await writer.WriteLineAsync(PipeProtocol.Serialize(request).AsMemory(), cts.Token);
 
             var line = await reader.ReadLineAsync(cts.Token);

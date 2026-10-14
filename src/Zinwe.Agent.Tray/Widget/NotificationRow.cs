@@ -10,8 +10,10 @@ public sealed class NotificationRow
     public string Body { get; init; } = "";
     /// <summary>Relative time only ("Just now", "5 min ago", …).</summary>
     public string When { get; init; } = "";
-    /// <summary>Who sent it, prefixed to the time in the bubble ("You · Just now" / "Admin · 5 min ago").</summary>
-    public string Stamp => $"{(IsMine ? "You" : "Admin")} · {When}";
+    /// <summary>Who sent it, prefixed to the time ("You · Just now" / "Admin · 5 min ago" / "Zinwe · 1 h ago").</summary>
+    public string Stamp => $"{(IsMine ? "You" : FromLabel)} · {When}";
+    /// <summary>"Admin" for a chat line, "Zinwe" for a protection notice.</summary>
+    public string FromLabel { get; init; } = "Admin";
     public Brush ToneBrush { get; init; } = Brushes.Gray;
     /// <summary>True for the employee's own reply (shown right-aligned); false for an admin message.</summary>
     public bool IsMine { get; init; }
@@ -41,6 +43,7 @@ public sealed class NotificationRow
             When = Relative(item.CreatedAtUtc),
             ToneBrush = Tone(item),
             IsMine = mine,
+            FromLabel = item.IsChat ? "Admin" : "Zinwe",
         };
     }
 
@@ -58,7 +61,8 @@ public sealed class NotificationRow
         return Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
     }
 
-    private static string Relative(DateTimeOffset at)
+    /// <summary>"Just now" / "5 min ago" / "3 h ago" / an absolute date past a day. Shared with the chat.</summary>
+    public static string Relative(DateTimeOffset at)
     {
         var ago = DateTimeOffset.UtcNow - at.ToUniversalTime();
         if (ago < TimeSpan.Zero)

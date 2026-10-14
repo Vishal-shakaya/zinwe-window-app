@@ -29,6 +29,8 @@ internal sealed partial class AgentWorker(
     MessageSync messages,
     MetricsUploadPump metrics,
     WorkStatusReader work,
+    WorkTransitionLog workLog,
+    ConsentGate consentGate,
     AgentStateHolder state,
     IOptions<AgentOptions> options,
     ILogger<AgentWorker> logger) : BackgroundService
@@ -36,6 +38,10 @@ internal sealed partial class AgentWorker(
     // Short so a credential the member types in the widget is picked up within a few seconds.
     private static readonly TimeSpan WaitForKeyInterval = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(5);
+    // How often the chat loop checks for a reply the member just typed (a small local file read).
+    private static readonly TimeSpan ChatReplyCheckInterval = TimeSpan.FromSeconds(2);
+    // How often the heartbeat loop checks the widget's change log (a file-size check).
+    private static readonly TimeSpan WorkChangeCheckInterval = TimeSpan.FromSeconds(2);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -107,6 +113,77 @@ internal sealed partial class AgentWorker(
 
     private async Task HeartbeatLoopAsync(DeviceIdentity identity, CancellationToken ct)
     {
+        // The chat runs on its own, shorter loop for as long as this identity is heartbeating.
+        using var chatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var chatLoop = MessageLoopAsync(identity, chatCts.Token);
+        try
+        {
+            await BeatAsync(identity, ct);
+        }
+        finally
+        {
+            await chatCts.CancelAsync();
+            try
+            {
+                await chatLoop;
+            }
+            catch (OperationCanceledException)
+            {
+                // expected on stop / device removal
+            }
+        }
+    }
+
+    /// <summary>
+    /// Owner↔member chat: pulls the conversation every <see cref="AgentOptions.MessagePollSeconds"/>, and
+    /// sooner (within ~2s) when the member has typed a reply in the widget. The only caller of
+    /// <see cref="MessageSync"/>, so outbox drains never overlap.
+    /// </summary>
+    private async Task MessageLoopAsync(DeviceIdentity identity, CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(Math.Clamp(options.Value.MessagePollSeconds, 5, 300));
+        var next = DateTimeOffset.MinValue;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (DateTimeOffset.UtcNow >= next || messages.HasPendingReplies)
+                {
+                    await messages.SyncAsync(identity.DeviceToken, ct);
+                    next = DateTimeOffset.UtcNow + interval;
+                }
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // SyncAsync handles network/file faults itself; anything else must not take the agent down.
+                LogChatLoopFailed(e.Message);
+                next = DateTimeOffset.UtcNow + interval;
+            }
+            await Task.Delay(ChatReplyCheckInterval, ct);
+        }
+    }
+
+    /// <summary>
+    /// Waits out the heartbeat interval, but heartbeats at once (within ~2s) when the member logs in, takes a
+    /// break, comes back or logs out, so the owner's Activity and "who's working" are live.
+    /// </summary>
+    private async Task WaitForNextBeatAsync(TimeSpan interval, CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow + interval;
+        var mark = workLog.Fingerprint();
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var left = deadline - DateTimeOffset.UtcNow;
+            await Task.Delay(left < WorkChangeCheckInterval ? left : WorkChangeCheckInterval, ct);
+            if (workLog.Fingerprint() != mark)
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task BeatAsync(DeviceIdentity identity, CancellationToken ct)
+    {
         var interval = TimeSpan.FromSeconds(options.Value.HeartbeatSeconds);
         var failures = 0;
 
@@ -115,10 +192,17 @@ internal sealed partial class AgentWorker(
             try
             {
                 var ws = work.Read(DateTimeOffset.Now);
+                // Every log in / break / back / log out since the last heartbeat that got through, with exact times.
+                var workEvents = workLog.Pending(DateTimeOffset.Now);
+                // The member's consent from the widget's consent screen (DPDP record), if given. Until it is,
+                // the event queue and metrics store record nothing (ConsentGate); protection rules stay on.
+                var consent = consentGate.Current();
                 var beat = await backend.HeartbeatAsync(
                     identity.DeviceToken,
                     new HeartbeatRequest(MachineInfo.Hostname, MachineInfo.OsVersion, AgentInfo.Version,
-                        ws.State, ws.WorkedSeconds, ws.BreakSeconds, ws.ChangedAt, ws.BreakReason), ct);
+                        ws.State, ws.WorkedSeconds, ws.BreakSeconds, ws.ChangedAt, ws.BreakReason, ws.BreakNote,
+                        ws.EndReason, ws.EndNote, workEvents, consent?.Version, consent?.AcceptedAt), ct);
+                workLog.Acknowledge(workEvents);
 
                 failures = 0;
                 interval = TimeSpan.FromSeconds(Math.Clamp(beat.NextHeartbeatSeconds, 15, 3600));
@@ -135,6 +219,8 @@ internal sealed partial class AgentWorker(
                 {
                     state.Set(AgentState.Connected, identity.DeviceId, DateTimeOffset.UtcNow);
                 }
+                // A newer release published from the admin app (null = up to date): the widget's Update button.
+                state.SetUpdate(beat.Update);
                 LogHeartbeat(identity.DeviceId, beat.PolicyVersion, (int)interval.TotalSeconds);
 
                 // Fetch failures are logged inside and retried next beat; a 401 here lands in the catch below.
@@ -142,9 +228,8 @@ internal sealed partial class AgentWorker(
                 {
                     state.SetPolicy(policy.Current);
                 }
-                await messages.SyncAsync(identity.DeviceToken, ct); // owner → member messages for the widget
                 await metrics.UploadAsync(identity.DeviceToken, DateTimeOffset.Now, ct); // usage metrics for the dashboard
-                await Task.Delay(interval, ct);
+                await WaitForNextBeatAsync(interval, ct);
             }
             catch (DeviceRejectedException e)
             {
@@ -187,4 +272,7 @@ internal sealed partial class AgentWorker(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Heartbeat failed ({Failures} in a row); retrying in {Seconds}s: {Error}")]
     private partial void LogHeartbeatFailed(int failures, int seconds, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Chat sync failed; retrying next round: {Error}")]
+    private partial void LogChatLoopFailed(string error);
 }

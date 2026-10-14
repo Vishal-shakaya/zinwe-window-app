@@ -51,6 +51,12 @@ public sealed class WorkTimerStateTests
 
         Assert.True(s.ToggleBreak(T0.AddMinutes(60), "ignored when resuming"));
         Assert.Null(s.BreakReason);
+        Assert.Null(s.BreakNote);
+
+        s.ToggleBreak(T0.AddMinutes(65), "Personal", "  Bank errand  ");
+        Assert.Equal("Bank errand", s.BreakNote);
+        s.ToggleBreak(T0.AddMinutes(68));
+        Assert.Null(s.BreakNote);
 
         s.ToggleBreak(T0.AddMinutes(70), new string('x', 500));
         Assert.Equal(WorkTimerState.MaxBreakReasonLength, s.BreakReason!.Length);

@@ -35,4 +35,27 @@ public sealed record AgentStatus(
     int? PolicyVersion = null,
     string? UsbMode = null,
     /// <summary>Where to download the update when <see cref="State"/> is <see cref="AgentState.UpdateRequired"/>.</summary>
-    string? DownloadUrl = null);
+    string? DownloadUrl = null,
+    /// <summary>A newer release offered by the backend (required when <see cref="State"/> is UpdateRequired,
+    /// otherwise optional); null when up to date.</summary>
+    string? UpdateVersion = null,
+    /// <summary>What's new in <see cref="UpdateVersion"/>, written by the Zinwe team.</summary>
+    string? UpdateNotes = null,
+    /// <summary>Where the one-click update is: see <see cref="UpdateStages"/>; null when not started.</summary>
+    string? UpdateStage = null,
+    /// <summary>Plain-language detail for the stage (progress, or why it failed).</summary>
+    string? UpdateMessage = null,
+    /// <summary>True when an installer was published, so "Update now" can run (else: manual download only).</summary>
+    bool UpdateInstallable = false);
+
+/// <summary>The one-click update's stages, in order ("failed" can follow any of them).</summary>
+public static class UpdateStages
+{
+    /// <summary>Downloading the installer and checking its SHA-256.</summary>
+    public const string Downloading = "downloading";
+    /// <summary>msiexec is running: the tray closes itself so its files can be replaced; the new service reopens it.</summary>
+    public const string Installing = "installing";
+    /// <summary>Dev / dry-run: the installer is downloaded and verified but deliberately not run.</summary>
+    public const string Ready = "ready";
+    public const string Failed = "failed";
+}

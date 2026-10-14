@@ -1,10 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Zinwe.Agent.Core.Messages;
 using Zinwe.Agent.Core;
 using Zinwe.Agent.Core.Ipc;
 using Zinwe.Agent.Tray.Widget;
@@ -12,15 +12,20 @@ using Zinwe.Agent.Tray.Widget;
 namespace Zinwe.Agent.Tray;
 
 /// <summary>
-/// The employee's main interface after setup: protection status, work timing (Start/Break/End),
-/// admin messages, and the consent card. Minimizing hides it to the background; the agent keeps running.
-/// Replaces the old status-only card.
+/// The member's Zinwe in one compact view: their day (log in / take a break / log out with today's time) on top,
+/// then the chat with their admin (<see cref="ChatPanel"/>: a bar that opens the conversation when clicked), and
+/// notes from Zinwe's own protection as a slim strip when there are some. "Take a break" and "Log out" share one input view (<see cref="WorkPrompt"/>):
+/// a required reason, plus a note. Minimizing hides it; the agent keeps running.
 /// </summary>
 public partial class WidgetWindow : Window
 {
     private readonly WorkTimerStore _timerStore = new();
+    private readonly ConsentStore _consent = new();
     private readonly NotificationStore _noteStore;
     private readonly NotificationWatcher _watcher;
+    // "Update now": asks the service to install the offered release; returns why it couldn't, or null.
+    private readonly Func<Task<string?>> _startUpdate;
+    private string? _updateRefused;
 
     private WorkTimerState _timer;
 
@@ -34,24 +39,42 @@ public partial class WidgetWindow : Window
     private bool _updateRequired;
     private string? _updateDownloadUrl;
 
+    // The open input view (break / log out), or null.
+    private WorkPrompt? _prompt;
+    private string? _promptReason;
+
     /// <summary>Set by the tray on real shutdown so Closing stops hiding and actually closes.</summary>
     public bool AllowClose { get; set; }
 
-    public WidgetWindow(NotificationStore noteStore, NotificationWatcher watcher)
+    /// <summary>The member is looking at the open chat (the tray skips toasts for chat lines while this is true).</summary>
+    public bool IsReading => IsVisible && IsActive && WindowState != WindowState.Minimized
+        && ConnectedContent.Visibility == Visibility.Visible && Chat.IsOpen;
+
+    public WidgetWindow(NotificationStore noteStore, NotificationWatcher watcher, Func<Task<string?>> startUpdate)
     {
         _noteStore = noteStore;
         _watcher = watcher;
+        _startUpdate = startUpdate;
         InitializeComponent();
 
         _timer = _timerStore.Load(DateTimeOffset.Now);
+        Logo.ToolTip = $"Zinwe {AgentInfo.Version}";
 
         _tick.Tick += (_, _) => OnTick();
         _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
 
         _watcher.Refreshed += OnNotificationsRefreshed;
+        Activated += (_, _) =>
+        {
+            var file = _noteStore.Load();
+            MarkNoticesReadIfShown(file);
+            Chat.Refresh(); // coming back to the window reads the admin's new messages
+        };
 
         Loaded += async (_, _) =>
         {
+            Chat.Attach(_noteStore, _watcher, () => IsReading);
+            Chat.OpenChanged += KeepOnScreen;
             RenderTimer();
             RenderNotifications(_watcher.Poll());
             await RefreshStatusAsync();
@@ -62,39 +85,30 @@ public partial class WidgetWindow : Window
         Closing += OnClosing;
     }
 
-    // ---- Work timing -------------------------------------------------------
+    // ---- Work: log in / break / log out --------------------------------------
 
-    private void OnStart(object sender, RoutedEventArgs e) => Transition(t => t.Start(DateTimeOffset.Now), "start");
+    private void OnLogIn(object sender, RoutedEventArgs e) => Transition((t, now) => t.Start(now), "start");
 
     private void OnBreak(object sender, RoutedEventArgs e)
     {
-        // Label is "Break" while working and "Resume" while on break.
+        // "Take a break" while working; "I'm back" while on a break.
         if (_timer.State == WorkState.OnBreak)
         {
-            Transition(t => t.ToggleBreak(DateTimeOffset.Now), "resume");
+            Transition((t, now) => t.ToggleBreak(now), "resume");
             return;
         }
-        // Going on a break: ask why first (one tap). The break starts when a reason is picked.
-        BreakReasonPanel.Visibility = BreakReasonPanel.Visibility == Visibility.Visible
-            ? Visibility.Collapsed : Visibility.Visible;
+        OpenPrompt(WorkPrompt.Break);
     }
 
-    private void OnBreakReason(object sender, RoutedEventArgs e)
-    {
-        var reason = (sender as FrameworkElement)?.Tag as string;
-        BreakReasonPanel.Visibility = Visibility.Collapsed;
-        Transition(t => t.ToggleBreak(DateTimeOffset.Now, reason), "break");
-    }
+    private void OnLogOut(object sender, RoutedEventArgs e) => OpenPrompt(WorkPrompt.LogOut);
 
-    private void OnBreakCancel(object sender, RoutedEventArgs e) => BreakReasonPanel.Visibility = Visibility.Collapsed;
-
-    private void OnEnd(object sender, RoutedEventArgs e) => Transition(t => t.End(DateTimeOffset.Now), "end");
-
-    private void Transition(Func<WorkTimerState, bool> action, string logAction)
+    // One timestamp for the change: the state's LastTransitionAtUtc and the change-log line the agent sends must
+    // match exactly (the backend recognises a change it already has by its time).
+    private void Transition(Func<WorkTimerState, DateTimeOffset, bool> action, string logAction)
     {
         var now = DateTimeOffset.Now;
         _timer.RollOverIfNewDay(now);
-        if (!action(_timer))
+        if (!action(_timer, now))
         {
             return;
         }
@@ -102,6 +116,102 @@ public partial class WidgetWindow : Window
         _timerStore.AppendLog(logAction, _timer, now);
         RenderTimer();
     }
+
+    // ---- The one input view (break / log out) ---------------------------------
+
+    private void OpenPrompt(WorkPrompt prompt)
+    {
+        _prompt = prompt;
+        _promptReason = null;
+        PromptTitle.Text = prompt.Title;
+        PromptSubtitle.Text = prompt.Subtitle;
+        PromptConfirm.Content = prompt.ConfirmLabel;
+        PromptNote.Text = "";
+
+        ReasonChips.Children.Clear();
+        foreach (var reason in prompt.Reasons)
+        {
+            var chip = new RadioButton
+            {
+                Content = reason,
+                GroupName = "reason",
+                Style = (Style)FindResource("Zinwe.Chip"),
+            };
+            chip.Checked += (_, _) =>
+            {
+                _promptReason = reason;
+                UpdatePrompt();
+                if (_prompt?.NoteRequired(reason) == true)
+                {
+                    PromptNote.Focus(); // "Other": go straight to the words
+                }
+            };
+            ReasonChips.Children.Add(chip);
+        }
+
+        ActionsPanel.Visibility = Visibility.Collapsed;
+        PromptPanel.Visibility = Visibility.Visible;
+        UpdatePrompt();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () => (ReasonChips.Children[0] as UIElement)?.Focus());
+    }
+
+    private void ClosePrompt()
+    {
+        _prompt = null;
+        _promptReason = null;
+        PromptPanel.Visibility = Visibility.Collapsed;
+        ActionsPanel.Visibility = Visibility.Visible;
+    }
+
+    private void UpdatePrompt()
+    {
+        if (_prompt is null)
+        {
+            return;
+        }
+        PromptNotePlaceholder.Text = _prompt.NotePlaceholder(_promptReason);
+        PromptNotePlaceholder.Visibility = PromptNote.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        var missing = _prompt.Missing(_promptReason, PromptNote.Text);
+        PromptConfirm.IsEnabled = missing is null;
+        PromptHint.Text = missing ?? (_prompt == WorkPrompt.LogOut
+            ? "Your time stops when you log out. You can log in again any time today."
+            : "Your work time pauses until you tap I'm back.");
+    }
+
+    private void OnPromptNoteChanged(object sender, TextChangedEventArgs e) => UpdatePrompt();
+
+    private void OnPromptCancel(object sender, RoutedEventArgs e) => ClosePrompt();
+
+    private void OnPromptKeyDown(object sender, KeyEventArgs e)
+    {
+        // Ctrl+Enter confirms from the note box (plain Enter adds a line).
+        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && PromptConfirm.IsEnabled)
+        {
+            e.Handled = true;
+            OnPromptConfirm(sender, e);
+        }
+    }
+
+    private void OnPromptConfirm(object sender, RoutedEventArgs e)
+    {
+        if (_prompt is null || _prompt.Missing(_promptReason, PromptNote.Text) is not null)
+        {
+            return;
+        }
+        var (reason, note) = (_promptReason, PromptNote.Text);
+        if (_prompt == WorkPrompt.Break)
+        {
+            Transition((t, now) => t.ToggleBreak(now, reason, note), "break");
+        }
+        else
+        {
+            Transition((t, now) => t.End(now, reason, note), "end");
+        }
+        ClosePrompt();
+        RenderTimer();
+    }
+
+    // ---- Rendering the day ------------------------------------------------------
 
     private void OnTick()
     {
@@ -123,111 +233,93 @@ public partial class WidgetWindow : Window
     private void RenderTimer()
     {
         var now = DateTimeOffset.Now;
-        WorkedTime.Text = Format(_timer.LiveWorked(now));
+        Greeting.Text = WorkSummary.Greeting(now);
+        // The big number is whatever is running now: the break while on one, else time worked today.
+        WorkedTime.Text = WorkSummary.Clock(WorkSummary.Hero(_timer, now));
+        WorkedTime.Foreground = (Brush)FindResource(_timer.State == WorkState.OnBreak ? "Zinwe.Warn" : "Zinwe.Ink");
+        StatusLine.Text = WorkSummary.Status(_timer);
 
-        var brk = _timer.LiveBreak(now);
-        BreakTime.Text = _timer.State == WorkState.OnBreak && !string.IsNullOrEmpty(_timer.BreakReason)
-            ? $"On break ({_timer.BreakReason}) {Format(brk)}"
-            : $"On break {Format(brk)}";
-        BreakTime.Visibility = brk > TimeSpan.Zero || _timer.State == WorkState.OnBreak
-            ? Visibility.Visible : Visibility.Collapsed;
+        var secondary = WorkSummary.Secondary(_timer, now);
+        BreakLine.Text = secondary ?? "";
+        BreakLine.Visibility = secondary is null ? Visibility.Collapsed : Visibility.Visible;
 
-        TimerStateText.Text = _timer.State switch
+        WorkPillText.Text = WorkSummary.Pill(_timer.State);
+        var (pillBg, pillFg) = _timer.State switch
         {
-            WorkState.Working => "Working",
-            WorkState.OnBreak => "On break",
-            WorkState.Ended => "Ended for today",
-            _ => "Not started",
+            WorkState.Working => ("Zinwe.OkTint", "Zinwe.Ok"),
+            WorkState.OnBreak => ("Zinwe.WarnTint", "Zinwe.Warn"),
+            _ => ("Zinwe.Paper", "Zinwe.Muted"),
         };
+        WorkPill.Background = (Brush)FindResource(pillBg);
+        WorkPillText.Foreground = (Brush)FindResource(pillFg);
 
-        // Work is paused while an update is required: the controls stay disabled until the agent is updated.
-        StartButton.IsEnabled = _timer.CanStart && !_updateRequired;
-        BreakButton.IsEnabled = _timer.CanToggleBreak && !_updateRequired;
-        EndButton.IsEnabled = _timer.CanEnd && !_updateRequired;
-        BreakButton.Content = _timer.State == WorkState.OnBreak ? "Resume" : "Break";
-        if (!_timer.CanToggleBreak || _updateRequired)
+        // Only the buttons that make sense right now.
+        var clockedIn = _timer.State is WorkState.Working or WorkState.OnBreak;
+        LogInButton.Visibility = clockedIn ? Visibility.Collapsed : Visibility.Visible;
+        WorkingActions.Visibility = clockedIn ? Visibility.Visible : Visibility.Collapsed;
+        LogInButton.Content = _timer.State == WorkState.Ended ? "Log in again" : "Log in";
+
+        var onBreak = _timer.State == WorkState.OnBreak;
+        BreakButton.Content = onBreak ? "I'm back" : "Take a break";
+        BreakButton.Style = (Style)FindResource(onBreak ? "Zinwe.PrimaryButton" : "Zinwe.OutlineButton");
+
+        // Work is paused while an update is required.
+        LogInButton.IsEnabled = !_updateRequired;
+        BreakButton.IsEnabled = !_updateRequired;
+        LogOutButton.IsEnabled = !_updateRequired;
+
+        // A prompt that no longer applies (day rolled over, update required) closes itself.
+        if (_prompt is not null && (_updateRequired || !clockedIn || (_prompt == WorkPrompt.Break && onBreak)))
         {
-            BreakReasonPanel.Visibility = Visibility.Collapsed;
+            ClosePrompt();
         }
-        StartButton.Content = _timer.State == WorkState.Ended ? "Start again" : "Start";
     }
 
-    private static string Format(TimeSpan t) =>
-        $"{(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}";
-
-    // ---- Notifications -----------------------------------------------------
+    // ---- Messages + notices -----------------------------------------------------
 
     private void OnNotificationsRefreshed(NotificationFile file) => RenderNotifications(file);
 
     private void RenderNotifications(NotificationFile file)
     {
-        var rows = file.Items.Select(NotificationRow.From).ToList();
-        MessageList.ItemsSource = rows;
-        NoMessages.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-        var unread = file.Items.Count(i => !i.Read);
-        UnreadCount.Text = unread.ToString();
-        UnreadBadge.Visibility = unread > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Notes from Zinwe's own protection (the chat renders itself): shown only when there are some.
+        var notices = file.Items.Where(i => !i.IsChat).ToList();
+        NoticeList.ItemsSource = notices.Select(NotificationRow.From).ToList();
+        NoticesCard.Visibility = notices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        MarkNoticesReadIfShown(file);
     }
 
-    private void OnMarkRead(object sender, RoutedEventArgs e) => RenderNotifications(_noteStore.MarkAllRead());
-
-    private void OnClear(object sender, RoutedEventArgs e) => RenderNotifications(_noteStore.Clear());
-
-    // ---- Reply (member → admin) --------------------------------------------
-    // The reply is queued to the shared outbox; the agent posts it on its next check-in and the admin sees it
-    // on the dashboard. The member's own line comes back into this list on the following sync.
-    private readonly MessageOutbox _outbox = new();
-
-    private void OnReplyKeyDown(object sender, KeyEventArgs e)
+    /// <summary>Notices count as read once the employee has the widget in front of them.</summary>
+    private void MarkNoticesReadIfShown(NotificationFile file)
     {
-        if (e.Key == Key.Enter)
+        if (IsVisible && IsActive && file.Items.Any(i => !i.IsChat && !i.Read))
         {
-            e.Handled = true;
-            SendReply();
+            _noteStore.MarkNoticesRead();
         }
     }
 
-    private void OnReply(object sender, RoutedEventArgs e) => SendReply();
-
-    private void SendReply()
+    /// <summary>Opening the chat makes the window taller: nudge it up so its bottom stays on the screen.</summary>
+    private void KeepOnScreen() => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
     {
-        var text = ReplyInput.Text.Trim();
-        if (text.Length == 0)
+        var area = SystemParameters.WorkArea;
+        if (Top + ActualHeight > area.Bottom)
         {
-            return;
+            Top = Math.Max(area.Top, area.Bottom - ActualHeight - 8);
         }
-        try
-        {
-            _outbox.Append(text);
-            ReplyInput.Clear();
-            ReplyNote.Text = "Reply sent — it appears in the conversation shortly.";
-        }
-        catch (Exception)
-        {
-            ReplyNote.Text = "Couldn't send right now. Please try again.";
-        }
-        ReplyNote.Visibility = Visibility.Visible;
-    }
+    });
 
-    // ---- Protection status (same source as the tray tooltip) ---------------
+    /// <summary>"Open chat" (tray menu, a message toast): the chat is right here, so go to its end and the composer.</summary>
+    public void FocusChat() => Chat.Activate();
+
+    private void OnClear(object sender, RoutedEventArgs e) => RenderNotifications(_noteStore.ClearNotices());
+
+    // ---- Protection status (same source as the tray tooltip) ------------------
 
     private async Task RefreshStatusAsync()
     {
         var status = await AgentPipeClient.GetStatusAsync(TimeSpan.FromSeconds(3));
-        var (headline, detail, tone) = StatusText.Describe(status);
-
-        Headline.Text = headline;
-        Detail.Text = detail;
-        StatusDot.Fill = (Brush)FindResource(tone switch
-        {
-            StatusTone.Ok => "Zinwe.Ok",
-            StatusTone.Warn => "Zinwe.Warn",
-            _ => "Zinwe.Bad",
-        });
-        Hostname.Text = status?.Hostname ?? Environment.MachineName;
-        UsbRule.Text = StatusText.UsbRule(status?.UsbMode);
-        Version.Text = status is null ? AgentInfo.Version : status.AgentVersion;
+        // No status chip in the header: the logo's tooltip carries the protection status and version.
+        var (headline, detail, _) = StatusText.Describe(status);
+        Logo.ToolTip = $"{headline}. {detail}{Environment.NewLine}Zinwe {status?.AgentVersion ?? AgentInfo.Version}";
 
         RenderConnectState(status);
     }
@@ -240,12 +332,17 @@ public partial class WidgetWindow : Window
         var enrolled = state is AgentState.Connected or AgentState.Offline or AgentState.UpdateRequired;
         var needsConnect = state is AgentState.NotEnrolled or AgentState.Rejected or AgentState.Enrolling;
 
-        ConnectedContent.Visibility = enrolled ? Visibility.Visible : Visibility.Collapsed;
+        // A connected PC asks for the member's consent first (once per policy version).
+        var needsConsent = enrolled && !_consent.HasConsented();
+        ConsentPanel.Visibility = needsConsent ? Visibility.Visible : Visibility.Collapsed;
+        ConnectedContent.Visibility = enrolled && !needsConsent ? Visibility.Visible : Visibility.Collapsed;
         ConnectPanel.Visibility = needsConnect ? Visibility.Visible : Visibility.Collapsed;
+        SetupScroller.Visibility = needsConnect || needsConsent ? Visibility.Visible : Visibility.Collapsed;
+        Chat.SetConnection(status);
 
         _updateRequired = state == AgentState.UpdateRequired;
         _updateDownloadUrl = status?.DownloadUrl;
-        UpdatePanel.Visibility = _updateRequired ? Visibility.Visible : Visibility.Collapsed;
+        RenderUpdate(status);
         // Re-gate the work buttons now that the pause flag may have changed.
         if (enrolled)
         {
@@ -263,6 +360,49 @@ public partial class WidgetWindow : Window
                 ShowConnectMessage(status?.Message ?? "That didn't work — check the ID and try again.", error: true);
                 break;
         }
+    }
+
+    /// <summary>
+    /// The update card: required (orange, work paused) or optional (quiet), with "Update now" and its progress.
+    /// Status is polled every second while an update runs, so progress feels live.
+    /// </summary>
+    private void RenderUpdate(AgentStatus? status)
+    {
+        var view = UpdateView.From(status);
+        UpdatePanel.Visibility = view.Show ? Visibility.Visible : Visibility.Collapsed;
+        _statusTimer.Interval = TimeSpan.FromSeconds(view.Busy ? 1 : 5);
+        if (!view.Show)
+        {
+            _updateRefused = null;
+            return;
+        }
+
+        UpdatePanel.Background = (Brush)FindResource(view.Required ? "Zinwe.OrangeTint" : "Zinwe.White");
+        UpdatePanel.BorderBrush = (Brush)FindResource(view.Required ? "Zinwe.OrangeStrong" : "Zinwe.Line");
+        UpdateIcon.Background = (Brush)FindResource(view.Required ? "Zinwe.White" : "Zinwe.OrangeTint");
+        UpdateTitle.Text = view.Title;
+        UpdateBody.Text = view.Body;
+        UpdateBody.Foreground = (Brush)FindResource(view.Required ? "Zinwe.OrangeInk" : "Zinwe.Muted");
+        UpdateNotes.Text = view.Notes is null ? "" : $"What's new: {view.Notes}";
+        UpdateNotes.Visibility = view.Notes is null ? Visibility.Collapsed : Visibility.Visible;
+
+        UpdateButton.Content = view.Button;
+        UpdateButton.Visibility = view.ButtonVisible ? Visibility.Visible : Visibility.Collapsed;
+        UpdateButton.IsEnabled = view.ButtonEnabled;
+        ManualDownloadButton.Visibility = view.ShowManual ? Visibility.Visible : Visibility.Collapsed;
+
+        // The service's progress, or (before it took the request) why it refused.
+        var progress = _updateRefused ?? view.Progress;
+        UpdateProgress.Text = progress ?? "";
+        UpdateProgress.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateProgress.Foreground = (Brush)FindResource(view.ProgressIsError || _updateRefused is not null ? "Zinwe.Bad" : "Zinwe.Muted");
+    }
+
+    private async void OnUpdateNow(object sender, RoutedEventArgs e)
+    {
+        UpdateButton.IsEnabled = false;
+        _updateRefused = await _startUpdate();
+        await RefreshStatusAsync();
     }
 
     /// <summary>Open the update download in the default browser; the employee installs it manually.</summary>
@@ -320,8 +460,6 @@ public partial class WidgetWindow : Window
 
     // ---- Window lifetime ---------------------------------------------------
 
-    private void OnMinimize(object sender, RoutedEventArgs e) => HideToBackground();
-
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (AllowClose)
@@ -329,6 +467,7 @@ public partial class WidgetWindow : Window
             _tick.Stop();
             _statusTimer.Stop();
             _watcher.Refreshed -= OnNotificationsRefreshed;
+            Chat.Detach();
             _timerStore.Save(_timer);
             return;
         }
@@ -341,5 +480,37 @@ public partial class WidgetWindow : Window
     {
         _timerStore.Save(_timer);
         Hide();
+    }
+
+    // ---- Consent (DPDP): the member's own agreement, once per policy version ----------------
+
+    private void OnConsentCheckChanged(object sender, RoutedEventArgs e) =>
+        ConsentAgree.IsEnabled = ConsentCheck.IsChecked == true;
+
+    private void OnConsentAgree(object sender, RoutedEventArgs e)
+    {
+        if (ConsentCheck.IsChecked != true)
+        {
+            return;
+        }
+        // The service reads this file and reports the agreement on its next heartbeat.
+        _consent.Accept(DateTimeOffset.Now);
+        ConsentPanel.Visibility = Visibility.Collapsed;
+        SetupScroller.Visibility = Visibility.Collapsed;
+        ConnectedContent.Visibility = Visibility.Visible;
+        RenderTimer();
+    }
+
+    private void OnOpenPolicy(object sender, RoutedEventArgs e)
+    {
+        var slug = (sender as FrameworkElement)?.Tag as string ?? "privacy";
+        try
+        {
+            Process.Start(new ProcessStartInfo($"https://zinwe.io/legal/{slug}") { UseShellExecute = true });
+        }
+        catch
+        {
+            // No default browser: nothing to do; the text above already explains the essentials.
+        }
     }
 }

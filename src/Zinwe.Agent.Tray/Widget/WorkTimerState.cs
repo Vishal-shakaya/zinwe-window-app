@@ -51,8 +51,20 @@ public sealed class WorkTimerState
     /// </summary>
     public string? BreakReason { get; set; }
 
+    /// <summary>Optional message the employee added to the break (e.g. "Bank errand"); null otherwise.</summary>
+    public string? BreakNote { get; set; }
+
+    /// <summary>Why the employee logged out (e.g. "Done for today"), picked in the widget; null until they do.</summary>
+    public string? EndReason { get; set; }
+
+    /// <summary>The message the employee added when logging out; null otherwise.</summary>
+    public string? EndNote { get; set; }
+
     /// <summary>Longest break reason we keep (matches the backend's limit).</summary>
     public const int MaxBreakReasonLength = 120;
+
+    /// <summary>Longest break note we keep (matches the backend's limit).</summary>
+    public const int MaxBreakNoteLength = 280;
 
     /// <summary>True when the employee can press Start (fresh day or after End).</summary>
     [JsonIgnore]
@@ -99,6 +111,8 @@ public sealed class WorkTimerState
             return false;
         }
         State = WorkState.Working;
+        EndReason = null;
+        EndNote = null;
         LastTransitionAtUtc = now;
         return true;
     }
@@ -107,7 +121,7 @@ public sealed class WorkTimerState
     /// Toggles between Working and OnBreak. Going on a break records <paramref name="reason"/>
     /// (trimmed, capped); coming back clears it. Returns false when not clocked in.
     /// </summary>
-    public bool ToggleBreak(DateTimeOffset now, string? reason = null)
+    public bool ToggleBreak(DateTimeOffset now, string? reason = null, string? note = null)
     {
         if (!CanToggleBreak)
         {
@@ -115,23 +129,28 @@ public sealed class WorkTimerState
         }
         Settle(now);
         State = State == WorkState.Working ? WorkState.OnBreak : WorkState.Working;
-        BreakReason = State == WorkState.OnBreak ? CleanReason(reason) : null;
+        var onBreak = State == WorkState.OnBreak;
+        BreakReason = onBreak ? Clean(reason, MaxBreakReasonLength) : null;
+        BreakNote = onBreak ? Clean(note, MaxBreakNoteLength) : null;
         LastTransitionAtUtc = now;
         return true;
     }
 
-    private static string? CleanReason(string? reason)
+    private static string? Clean(string? value, int max)
     {
-        var text = reason?.Trim();
+        var text = value?.Trim();
         if (string.IsNullOrEmpty(text))
         {
             return null;
         }
-        return text.Length > MaxBreakReasonLength ? text[..MaxBreakReasonLength] : text;
+        return text.Length > max ? text[..max] : text;
     }
 
-    /// <summary>Ends the workday. Returns false when not clocked in.</summary>
-    public bool End(DateTimeOffset now)
+    /// <summary>
+    /// Ends the workday (the employee logs out), recording why (<paramref name="reason"/>) and their
+    /// <paramref name="note"/>, trimmed and capped. Returns false when not clocked in.
+    /// </summary>
+    public bool End(DateTimeOffset now, string? reason = null, string? note = null)
     {
         if (!CanEnd)
         {
@@ -140,6 +159,9 @@ public sealed class WorkTimerState
         Settle(now);
         State = WorkState.Ended;
         BreakReason = null;
+        BreakNote = null;
+        EndReason = Clean(reason, MaxBreakReasonLength);
+        EndNote = Clean(note, MaxBreakNoteLength);
         LastTransitionAtUtc = now;
         return true;
     }
@@ -183,6 +205,9 @@ public sealed class WorkTimerState
         BreakSeconds = 0;
         LastTransitionAtUtc = null;
         BreakReason = null;
+        BreakNote = null;
+        EndReason = null;
+        EndNote = null;
         return true;
     }
 

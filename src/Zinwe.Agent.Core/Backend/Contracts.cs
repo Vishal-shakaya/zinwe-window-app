@@ -30,16 +30,41 @@ public sealed record HeartbeatRequest(
     long WorkedSeconds,
     long BreakSeconds,
     DateTimeOffset? WorkChangedAt = null,
-    string? BreakReason = null);
+    string? BreakReason = null,
+    string? BreakNote = null,
+    string? EndReason = null,
+    string? EndNote = null,
+    IReadOnlyList<WorkEvent>? WorkEvents = null,
+    string? ConsentVersion = null,
+    DateTimeOffset? ConsentAt = null);
 
-/// <param name="UpdateRequired">The agent is below the owner/plan's minimum version and must be updated.</param>
+/// <summary>
+/// One change the member made in the widget, at its exact time: <paramref name="State"/> is "working" (logged in /
+/// back), "on_break" or "ended" (logged out); <paramref name="Reason"/>/<paramref name="Note"/> are the break's or
+/// the log-out's. Sent in <see cref="HeartbeatRequest.WorkEvents"/> until the backend has them.
+/// </summary>
+public sealed record WorkEvent(DateTimeOffset At, string State, string? Reason = null, string? Note = null);
+
+/// <param name="UpdateRequired">The agent is below a required release (or the minimum) and must be updated.</param>
+/// <param name="DownloadUrl">Public download page (manual fallback when the one-click update can't run).</param>
+/// <param name="Update">A newer release published from the admin app, when there is one.</param>
 public sealed record HeartbeatResponse(
     long DeviceId,
     DateTimeOffset ServerTime,
     int NextHeartbeatSeconds,
     int PolicyVersion,
     bool UpdateRequired = false,
-    string? DownloadUrl = null);
+    string? DownloadUrl = null,
+    AgentUpdate? Update = null);
+
+/// <summary>
+/// A newer Windows agent release the PC should install. <paramref name="DownloadUrl"/> is either a path on our own
+/// backend ("/api/devices/releases/5/download/", fetched with this PC's device token) or an external https URL;
+/// the agent installs it only if the file's SHA-256 (and size, when given) match. Empty URL/hash = no installer
+/// published (only a minimum version is set): the member updates manually.
+/// </summary>
+public sealed record AgentUpdate(
+    string Version, string? Notes, bool Required, string? DownloadUrl, string? Sha256, long? Size);
 
 /// <summary>One rolled-up usage metric uploaded via POST /api/devices/metrics/upload/.</summary>
 public sealed record MetricUpload(
@@ -58,8 +83,10 @@ public sealed record EventUploadRequest(EventUpload[] Events);
 
 /// <summary>One line of the member's conversation (GET /api/devices/messages/). Shown in the employee widget.</summary>
 /// <param name="Sender">"owner" = an admin message/alert; "member" = the member's own reply. Trailing/optional for back-compat.</param>
+/// <param name="ReadByMember">Server-side "the member has read it" (only meaningful for owner lines).</param>
 public sealed record AgentMessage(
-    long Id, string Title, string? Body, string Severity, DateTimeOffset CreatedAt, string Sender = "owner");
+    long Id, string Title, string? Body, string Severity, DateTimeOffset CreatedAt, string Sender = "owner",
+    bool ReadByMember = false);
 
 /// <summary>POST /api/devices/messages/ — the member replies in the thread.</summary>
 public sealed record MemberReplyRequest(string Body);

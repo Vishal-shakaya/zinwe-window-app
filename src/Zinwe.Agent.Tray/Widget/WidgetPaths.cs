@@ -26,6 +26,9 @@ public static class WidgetPaths
     /// </summary>
     public static string Notifications => Path.Combine(Directory, "notifications.json");
 
+    /// <summary>The member's consent to monitoring (version + when), written by the consent screen.</summary>
+    public static string Consent => Path.Combine(Directory, "consent.json");
+
     public static void EnsureDirectory()
     {
         try

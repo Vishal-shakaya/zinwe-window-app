@@ -15,6 +15,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Real Zinwe mark as the window/taskbar/exe icon. -->
     <ApplicationIcon>Assets\zinwe.ico</ApplicationIcon>
+    <!-- File description = the app name Windows shows on the tray's notifications (else "Zinwe.Agent.Tray"). -->
+    <AssemblyTitle>Zinwe</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +28,11 @@
   <ItemGroup>
     <!-- The brand mark (orange Z on white): shown in the widget; also the source for the tray icon. -->
     <Resource Include="Assets\zinwe-mark.png" />
+    <!-- The wordmark (widget header) and Geist, the website's typeface (SIL OFL 1.1, see Assets\Fonts\Geist-OFL.txt).
+         Regenerate the logo files with design\make_tray_brand.py. -->
+    <Resource Include="Assets\zinwe-logo.png" />
+    <Resource Include="Assets\Fonts\*.ttf" />
+    <None Include="Assets\Fonts\Geist-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

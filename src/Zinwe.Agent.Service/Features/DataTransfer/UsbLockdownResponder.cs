@@ -33,7 +33,7 @@ internal sealed class UsbLockdownResponder(
         var id = -DateTimeOffset.UtcNow.Ticks;
         var body = $"A transfer over the {DataTransferEvents.HumanSize(limitBytes)} limit was detected, so copying "
             + "to USB drives has been paused on this PC. Ask your admin to restore it.";
-        notifications.Merge([new AgentMessage(id, "USB set to read-only", body, EventSeverity.Critical, at)]);
+        notifications.AddNotices([new AgentMessage(id, "USB set to read-only", body, EventSeverity.Critical, at)]);
 
         logger.LogWarning(
             "USB over-limit lockdown: {Bytes} bytes to {Dest} > {Limit}; USB set to read-only (dryRun={DryRun})",

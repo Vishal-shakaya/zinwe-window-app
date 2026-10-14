@@ -10,6 +10,9 @@ using Zinwe.Agent.Core.Work;
 using Zinwe.Agent.Core.Usb;
 using Zinwe.Agent.Service;
 using Zinwe.Agent.Service.Features;
+using Zinwe.Agent.Service.Session;
+using Zinwe.Agent.Service.Update;
+using Zinwe.Agent.Core.Update;
 using Zinwe.Agent.Service.Usb;
 
 // Content root = the exe's folder, so appsettings*.json load no matter what the working directory is
@@ -45,8 +48,12 @@ static string DataDirectory(IServiceProvider sp) =>
 
 builder.Services.AddSingleton(sp => new IdentityStore(DataDirectory(sp)));
 builder.Services.AddSingleton(sp => new PolicyStore(DataDirectory(sp)));
-builder.Services.AddSingleton(sp => new EventQueue(DataDirectory(sp)));
-builder.Services.AddSingleton(sp => new MetricsStore(DataDirectory(sp)));
+// The member's consent on the widget: until they agree, events and usage metrics aren't recorded at all.
+builder.Services.AddSingleton(sp => new ConsentGate(new ConsentReader(sp.GetRequiredService<IWidgetFolder>())));
+builder.Services.AddSingleton(sp => new EventQueue(
+    DataDirectory(sp), recordingAllowed: sp.GetRequiredService<ConsentGate>().IsGranted));
+builder.Services.AddSingleton(sp => new MetricsStore(
+    DataDirectory(sp), recordingAllowed: sp.GetRequiredService<ConsentGate>().IsGranted));
 builder.Services.AddSingleton<AgentStateHolder>();
 builder.Services.AddSingleton(sp => new MemberCredentialSource(
     sp.GetRequiredService<IOptionsMonitor<AgentOptions>>(),
@@ -62,21 +69,29 @@ builder.Services.AddSingleton<IUsbEnforcer>(sp => UsbEnforcerSelector.Select(
 builder.Services.AddSingleton<UsbProtection>();
 builder.Services.AddSingleton<IUsbDeviceWatcher, WmiUsbDeviceWatcher>();
 builder.Services.AddSingleton<PolicySync>();
-// Owner → member messages: NotificationWriter targets the per-user %LOCALAPPDATA%\Zinwe (the widget's folder),
-// NOT the agent data dir, so the widget sees them.
-builder.Services.AddSingleton(_ => new NotificationWriter());
+// The widget folder (%LOCALAPPDATA%\Zinwe) of whoever is signed in: the dev console agent's own, or - as the
+// LocalSystem service - the signed-in user's, with every file operation done AS that user.
+builder.Services.AddSingleton<IWidgetFolder, SignedInUserWidgetFolder>();
+// Owner ↔ member chat + protection notices for the widget (NOT the agent data dir, so the widget sees them).
+builder.Services.AddSingleton(sp => new NotificationWriter(sp.GetRequiredService<IWidgetFolder>()));
 // The member's outbound replies (widget writes, agent drains) — shared per-user file.
-builder.Services.AddSingleton(_ => new MessageOutbox());
+builder.Services.AddSingleton(sp => new MessageOutbox(sp.GetRequiredService<IWidgetFolder>()));
 builder.Services.AddSingleton<MessageSync>();
 // Usage metrics upload + the member's work status (read from the widget's per-user file).
 builder.Services.AddSingleton<MetricsUploadPump>();
-builder.Services.AddSingleton(_ => new WorkStatusReader());
+builder.Services.AddSingleton(sp => new WorkStatusReader(sp.GetRequiredService<IWidgetFolder>()));
+// Every log in / break / back / log out from the widget's change log, sent on the heartbeat until confirmed.
+builder.Services.AddSingleton(sp => new WorkTransitionLog(sp.GetRequiredService<IWidgetFolder>(), DataDirectory(sp)));
 builder.Services.AddSingleton<EventUploadPump>();
 
 // Self-contained feature modules (internet usage, data-transfer, remote-software...) register and run themselves.
 builder.AddFeatureModules();
 
 builder.Services.AddHostedService<AgentWorker>();
+// One-click update: download + verify the release the backend offers, then install it (LocalSystem only).
+builder.Services.AddSingleton<UpdateDownloader>();
+builder.Services.AddSingleton<AgentUpdater>();
+builder.Services.AddHostedService<PostUpdateRelauncher>();
 builder.Services.AddHostedService<PipeServer>();
 builder.Services.AddHostedService<EventUploader>();
 builder.Services.AddHostedService<UsbWatcherService>();

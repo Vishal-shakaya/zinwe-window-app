@@ -7,11 +7,13 @@ namespace Zinwe.Agent.Core.Messages;
 
 // Mirrors the widget's notification file schema (Zinwe.Agent.Tray.Widget.NotificationStore). The service
 // can't reference the tray project, so the shape is duplicated here. Keys are PascalCase; the widget reads
-// them case-insensitively. DEV NOTE: the widget file lives in the per-user %LOCALAPPDATA%\Zinwe; under the
-// console (dev) the agent is that same user, so this writes the right place. A production service running as
-// LocalSystem would need to resolve each signed-in user's LocalAppData (tracked as a later milestone).
+// them case-insensitively. The file lives in the signed-in member's %LOCALAPPDATA%\Zinwe, reached through
+// IWidgetFolder (the dev console agent: its own folder; the LocalSystem service: the signed-in user's, as them).
+// Kind: "chat" = a line of the owner<->member conversation (shown in the widget's Chat window);
+// "notice" = a note from Zinwe's own protection (USB blocked, ...). Null in files written before chat existed.
 internal sealed record WidgetNotification(
-    string Id, DateTimeOffset CreatedAtUtc, string Severity, string Title, string? Body, bool Read, string Sender = "owner");
+    string Id, DateTimeOffset CreatedAtUtc, string Severity, string Title, string? Body, bool Read, string Sender = "owner",
+    string? Kind = null);
 
 internal sealed class WidgetNotificationFile
 {
@@ -24,6 +26,12 @@ internal sealed class WidgetNotificationFile
 /// </summary>
 public sealed class NotificationWriter
 {
+    /// <summary>A line of the owner↔member conversation (from the backend).</summary>
+    public const string ChatKind = "chat";
+
+    /// <summary>A note from Zinwe's own protection on this PC (written by <see cref="IMemberNotifier"/>).</summary>
+    public const string NoticeKind = "notice";
+
     private const int MaxItems = 100;
 
     private static readonly JsonSerializerOptions Json = new()
@@ -32,26 +40,42 @@ public sealed class NotificationWriter
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly string _path;
+    private const string FileName = "notifications.json";
 
-    /// <summary><paramref name="directory"/> defaults to %LOCALAPPDATA%\Zinwe (the widget's own folder).</summary>
-    public NotificationWriter(string? directory = null)
+    private readonly IWidgetFolder _folder;
+
+    /// <summary><paramref name="directory"/> defaults to %LOCALAPPDATA%\Zinwe (the current user's widget folder).</summary>
+    public NotificationWriter(string? directory = null) : this(new LocalWidgetFolder(directory))
     {
-        var dir = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zinwe");
-        _path = Path.Combine(dir, "notifications.json");
     }
 
-    public string FilePath => _path;
+    /// <summary>Writes into whichever user's folder <paramref name="folder"/> resolves (the service: the signed-in member).</summary>
+    public NotificationWriter(IWidgetFolder folder) => _folder = folder;
 
-    /// <summary>Adds any messages not already in the file. Returns how many were newly added.</summary>
-    public int Merge(IReadOnlyList<AgentMessage> messages)
+    /// <summary>The file path right now ("" when nobody is signed in).</summary>
+    public string FilePath => _folder.Use(dir => Path.Combine(dir, FileName), "");
+
+    /// <summary>False while nobody is signed in: there is no widget to deliver to.</summary>
+    public bool HasSignedInUser => _folder.Use(_ => true, false);
+
+    /// <summary>Adds owner↔member chat lines not already in the file. Returns how many were newly added.</summary>
+    public int MergeChat(IReadOnlyList<AgentMessage> messages) => Merge(messages, ChatKind);
+
+    /// <summary>Adds notes from Zinwe's own protection (USB blocked, ...); never shown as chat. Returns how many were added.</summary>
+    public int AddNotices(IReadOnlyList<AgentMessage> notices) => Merge(notices, NoticeKind);
+
+    private int Merge(IReadOnlyList<AgentMessage> messages, string kind)
     {
         if (messages.Count == 0)
         {
             return 0;
         }
-        var file = Load();
+        return _folder.Use(dir => MergeInto(Path.Combine(dir, FileName), messages, kind), 0);
+    }
+
+    private static int MergeInto(string path, IReadOnlyList<AgentMessage> messages, string kind)
+    {
+        var file = Load(path);
         var seen = new HashSet<string>(file.Items.Select(i => i.Id), StringComparer.Ordinal);
 
         var added = 0;
@@ -62,7 +86,7 @@ public sealed class NotificationWriter
             {
                 // The member's own replies arrive "already read" (they wrote them); admin lines start unread.
                 var isMember = string.Equals(m.Sender, "member", StringComparison.OrdinalIgnoreCase);
-                file.Items.Add(new WidgetNotification(id, m.CreatedAt, m.Severity, m.Title, m.Body, Read: isMember, Sender: m.Sender));
+                file.Items.Add(new WidgetNotification(id, m.CreatedAt, m.Severity, m.Title, m.Body, Read: isMember, Sender: m.Sender, Kind: kind));
                 added++;
             }
         }
@@ -70,18 +94,32 @@ public sealed class NotificationWriter
         {
             // Keep the newest MaxItems so the file can't grow without bound.
             file.Items = [.. file.Items.OrderByDescending(i => i.CreatedAtUtc).Take(MaxItems)];
-            Save(file);
+            Save(path, file);
         }
         return added;
     }
 
-    private WidgetNotificationFile Load()
+    /// <summary>
+    /// True when every one of <paramref name="messageIds"/> is in the file and the member has opened it in the
+    /// widget (Read=true). A missing id counts as unread. Used to report "read" to the backend only once the
+    /// member has actually seen the messages, not merely when they reached the PC.
+    /// </summary>
+    public bool AllReadLocally(IEnumerable<long> messageIds) => _folder.Use(dir =>
+    {
+        var read = Load(Path.Combine(dir, FileName)).Items
+            .Where(i => i.Read)
+            .Select(i => i.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        return messageIds.All(id => read.Contains(id.ToString(CultureInfo.InvariantCulture)));
+    }, false);
+
+    private static WidgetNotificationFile Load(string path)
     {
         try
         {
-            if (File.Exists(_path))
+            if (File.Exists(path))
             {
-                return JsonSerializer.Deserialize<WidgetNotificationFile>(File.ReadAllText(_path), Json) ?? new WidgetNotificationFile();
+                return JsonSerializer.Deserialize<WidgetNotificationFile>(File.ReadAllText(path), Json) ?? new WidgetNotificationFile();
             }
         }
         catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
@@ -91,11 +129,11 @@ public sealed class NotificationWriter
         return new WidgetNotificationFile();
     }
 
-    private void Save(WidgetNotificationFile file)
+    private static void Save(string path, WidgetNotificationFile file)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var temp = _path + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(file, Json));
-        File.Move(temp, _path, overwrite: true);
+        File.Move(temp, path, overwrite: true);
     }
 }

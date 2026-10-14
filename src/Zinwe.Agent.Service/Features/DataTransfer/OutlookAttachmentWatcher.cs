@@ -24,6 +24,7 @@ internal sealed partial class OutlookAttachmentWatcher(
     private const int OlFolderSentMail = 5;
 
     private readonly CancellationTokenSource _cts = new();
+    private int _disposed;
     private Thread? _thread;
     // Only mail sent after the watcher started is reported; we never surface the historical Sent Items on startup.
     private DateTime _since = DateTime.Now;
@@ -205,6 +206,12 @@ internal sealed partial class OutlookAttachmentWatcher(
 
     public void Dispose()
     {
+        // Disposed twice on every policy change: by DataTransferModule (which owns its watchers) and again by
+        // the feature's DI scope. The second call must be a no-op, not a Cancel() on a disposed token source.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
         try
         {
             _cts.Cancel();

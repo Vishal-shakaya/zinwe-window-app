@@ -26,13 +26,17 @@ public static class StatusText
         _ => ("Unknown status", "", StatusTone.Warn),
     };
 
-    /// <summary>The USB rule in force, in the employee's words. "—" before the first policy arrives.</summary>
-    public static string UsbRule(string? wireMode) => wireMode switch
+    /// <summary>One or two words for the widget's status pill; the full sentence is its tooltip.</summary>
+    public static string Short(AgentStatus? status) => status?.State switch
     {
-        "allow" => "Allowed",
-        "read_only" => "Read-only (you can open files, not copy onto the drive)",
-        "block" => "Blocked by your company",
-        _ => "—",
+        null => "Not running",
+        AgentState.Connected => "Protected",
+        AgentState.Offline => "Offline",
+        AgentState.Enrolling => "Connecting",
+        AgentState.NotEnrolled => "Not set up",
+        AgentState.Rejected => "Not connected",
+        AgentState.UpdateRequired => "Update needed",
+        _ => "Unknown",
     };
 
     public static string LastSeen(DateTimeOffset? at)

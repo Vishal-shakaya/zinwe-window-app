@@ -18,6 +18,20 @@ public sealed class WorkStatusReaderTests : IDisposable
     }
 
     [Fact]
+    public void Log_out_reason_and_note_travel_only_with_the_ended_state()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "work-timing.json"),
+            """{"Date":"2026-10-10","State":"Ended","WorkedSeconds":60,"BreakSeconds":0,"EndReason":"Leaving early","EndNote":"Doctor"}""");
+        var ended = _reader.Read(Now);
+        Assert.Equal(("ended", "Leaving early", "Doctor"), (ended.State, ended.EndReason, ended.EndNote));
+
+        File.WriteAllText(Path.Combine(_dir, "work-timing.json"),
+            """{"Date":"2026-10-10","State":"Working","WorkedSeconds":60,"BreakSeconds":0,"EndReason":"stale"}""");
+        Assert.Null(_reader.Read(Now).EndReason);
+    }
+
+    [Fact]
     public void Missing_file_is_not_started()
     {
         Assert.Equal(WorkStatus.NotStarted, _reader.Read(Now));

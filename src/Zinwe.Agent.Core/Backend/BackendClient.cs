@@ -159,6 +159,43 @@ public sealed class BackendClient
     }
 
     /// <summary>Sends with "Authorization: Device &lt;token&gt;". A 401 means the owner removed this PC.</summary>
+    /// <summary>
+    /// Stream a release installer into <paramref name="destination"/>. A path ("/api/devices/releases/5/download/")
+    /// is fetched from our backend with this PC's device token; an absolute URL (a CDN) is fetched WITHOUT it - the
+    /// token never goes to another host - and must be https. The caller verifies the SHA-256 before using the file.
+    /// </summary>
+    public async Task DownloadAsync(string urlOrPath, string deviceToken, Stream destination, CancellationToken ct)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Get, ToDownloadUri(urlOrPath));
+        if (!message.RequestUri!.IsAbsoluteUri)
+        {
+            message.Headers.Authorization = new AuthenticationHeaderValue("Device", deviceToken);
+        }
+        // Headers-only completion: a 100 MB installer must not be buffered, nor hit HttpClient.Timeout mid-stream.
+        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode == HttpStatusCode.Unauthorized && !message.RequestUri.IsAbsoluteUri)
+        {
+            throw new DeviceRejectedException((await ReadFirstErrorAsync(response, ct)).Message);
+        }
+        response.EnsureSuccessStatusCode();
+        await using var body = await response.Content.ReadAsStreamAsync(ct);
+        await body.CopyToAsync(destination, ct);
+    }
+
+    internal static Uri ToDownloadUri(string urlOrPath)
+    {
+        if (urlOrPath.StartsWith('/'))
+        {
+            return new Uri(urlOrPath.TrimStart('/'), UriKind.Relative);
+        }
+        var uri = new Uri(urlOrPath, UriKind.Absolute);
+        if (uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback)
+        {
+            throw new InvalidOperationException("Release downloads must use https.");
+        }
+        return uri;
+    }
+
     private async Task<HttpResponseMessage> SendAsDeviceAsync(
         HttpMethod method, string path, string deviceToken, HttpContent? body, CancellationToken ct)
     {

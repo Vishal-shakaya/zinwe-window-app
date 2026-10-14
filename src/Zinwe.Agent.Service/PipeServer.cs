@@ -10,7 +10,9 @@ namespace Zinwe.Agent.Service;
 /// Signed-in users may read/write; only SYSTEM and Administrators may create the pipe or change its ACL.
 /// Pipes are never reachable from the network because the ACL denies the NETWORK logon SID.
 /// </summary>
-internal sealed partial class PipeServer(AgentStateHolder state, MemberCredentialSource credentials, ILogger<PipeServer> logger) : BackgroundService
+internal sealed partial class PipeServer(
+    AgentStateHolder state, MemberCredentialSource credentials, Update.AgentUpdater updater, ILogger<PipeServer> logger)
+    : BackgroundService
 {
     private const int MaxInstances = 8;
 
@@ -67,6 +69,11 @@ internal sealed partial class PipeServer(AgentStateHolder state, MemberCredentia
                 else if (request?.Type == PipeProtocol.RequestTypes.Enroll)
                 {
                     await writer.WriteLineAsync(PipeProtocol.Serialize(HandleEnroll(request)).AsMemory(), cts.Token);
+                }
+                else if (request?.Type == PipeProtocol.RequestTypes.Update)
+                {
+                    // "Update now": download, verify and install the offered release (progress goes on the status).
+                    await writer.WriteLineAsync(PipeProtocol.Serialize(updater.Start()).AsMemory(), cts.Token);
                 }
             }
             catch (Exception e) when (e is IOException or OperationCanceledException)

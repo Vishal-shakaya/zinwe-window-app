@@ -14,17 +14,21 @@ public sealed class MessageOutbox
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
-    private readonly string _path;
+    private const string FileName = "messages-outbox.json";
+
+    private readonly IWidgetFolder _folder;
     private readonly Lock _lock = new();
 
-    public MessageOutbox(string? directory = null)
+    /// <summary>The current user's own outbox (the widget; tests). <paramref name="directory"/> defaults to %LOCALAPPDATA%\Zinwe.</summary>
+    public MessageOutbox(string? directory = null) : this(new LocalWidgetFolder(directory))
     {
-        var dir = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zinwe");
-        _path = Path.Combine(dir, "messages-outbox.json");
     }
 
-    public string FilePath => _path;
+    /// <summary>The outbox in whichever user's folder <paramref name="folder"/> resolves (the service: the signed-in member).</summary>
+    public MessageOutbox(IWidgetFolder folder) => _folder = folder;
+
+    /// <summary>The file path right now ("" when nobody is signed in).</summary>
+    public string FilePath => _folder.Use(dir => Path.Combine(dir, FileName), "");
 
     private sealed class OutboxFile
     {
@@ -37,9 +41,14 @@ public sealed class MessageOutbox
         var reply = new OutboxReply(Guid.NewGuid().ToString("N"), body, DateTimeOffset.UtcNow);
         lock (_lock)
         {
-            var file = Load();
-            file.Items.Add(reply);
-            Save(file);
+            _folder.Use(dir =>
+            {
+                var path = Path.Combine(dir, FileName);
+                var file = Load(path);
+                file.Items.Add(reply);
+                Save(path, file);
+                return true;
+            }, false);
         }
         return reply.Id;
     }
@@ -49,7 +58,8 @@ public sealed class MessageOutbox
     {
         lock (_lock)
         {
-            return [.. Load().Items.OrderBy(i => i.CreatedAtUtc)];
+            return _folder.Use<IReadOnlyList<OutboxReply>>(
+                dir => [.. Load(Path.Combine(dir, FileName)).Items.OrderBy(i => i.CreatedAtUtc)], []);
         }
     }
 
@@ -63,23 +73,26 @@ public sealed class MessageOutbox
         }
         lock (_lock)
         {
-            var file = Load();
-            var before = file.Items.Count;
-            file.Items.RemoveAll(i => set.Contains(i.Id));
-            if (file.Items.Count != before)
+            _folder.Use(dir =>
             {
-                Save(file);
-            }
+                var path = Path.Combine(dir, FileName);
+                var file = Load(path);
+                if (file.Items.RemoveAll(i => set.Contains(i.Id)) > 0)
+                {
+                    Save(path, file);
+                }
+                return true;
+            }, false);
         }
     }
 
-    private OutboxFile Load()
+    private static OutboxFile Load(string path)
     {
         try
         {
-            if (File.Exists(_path))
+            if (File.Exists(path))
             {
-                var file = JsonSerializer.Deserialize<OutboxFile>(File.ReadAllText(_path), Json);
+                var file = JsonSerializer.Deserialize<OutboxFile>(File.ReadAllText(path), Json);
                 if (file is not null)
                 {
                     file.Items.RemoveAll(i => i is null || string.IsNullOrWhiteSpace(i.Id));
@@ -94,14 +107,14 @@ public sealed class MessageOutbox
         return new OutboxFile();
     }
 
-    private void Save(OutboxFile file)
+    private static void Save(string path, OutboxFile file)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var tmp = _path + ".tmp";
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var tmp = path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(file, Json));
-            File.Move(tmp, _path, overwrite: true);
+            File.Move(tmp, path, overwrite: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

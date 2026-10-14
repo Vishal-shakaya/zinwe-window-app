@@ -20,6 +20,12 @@ public sealed class AgentOptions
     /// <summary>Used until the backend tells us otherwise in a heartbeat response.</summary>
     public int HeartbeatSeconds { get; set; } = 60;
 
+    /// <summary>
+    /// How often the owner↔member chat is pulled (seconds, clamped 5..300). A reply the member types is sent
+    /// within a couple of seconds regardless.
+    /// </summary>
+    public int MessagePollSeconds { get; set; } = 15;
+
     public string DataDirectory { get; set; } = AgentInfo.DefaultDataDirectory;
 
     public EnforcementOptions Enforcement { get; set; } = new();
